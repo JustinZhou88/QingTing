@@ -89,4 +89,6 @@ $APP --selftest 5 [--engine deepFilter] [--in 麦克风名] [--out 输出设备�
 - [RNNoise](https://github.com/xiph/rnnoise)（BSD-3-Clause）
 - Apple `AUSoundIsolation`：系统自带的语音隔离
 
-本项目自己的代码尚未选择开源许可。
+## 许可
+
+本项目自己的代码以 [MIT 许可](LICENSE) 开源。第三方库按各自的许可使用，见上。
