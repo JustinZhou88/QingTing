@@ -1,4 +1,4 @@
-// 仅供模拟器预览界面：降噪库的空实现
+// Simulator UI preview only: stub implementations of the noise reduction libraries
 #include <stddef.h>
 typedef struct DFState DFState;
 typedef struct DenoiseState DenoiseState;

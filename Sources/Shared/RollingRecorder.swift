@@ -1,8 +1,8 @@
 import AVFoundation
 import Synchronization
 
-/// 循环录音：始终保留最近 N 秒，旧的被覆盖。实时线程只写，界面线程偶尔读快照存盘。
-/// 读快照时写端仍在写，最旧的几毫秒可能被覆盖，调试用途可以接受。
+/// Rolling recorder: always keeps the last N seconds, overwriting older audio. The real-time thread only writes; the UI thread occasionally reads a snapshot to save it.
+/// The writer keeps going while a snapshot is read, so the oldest few milliseconds may be overwritten; acceptable for debugging.
 final class RollingRecorder: @unchecked Sendable {
     let sampleRate: Double
     private let capacity: Int
@@ -24,14 +24,14 @@ final class RollingRecorder: @unchecked Sendable {
         written.store(w + count, ordering: .releasing)
     }
 
-    /// 最近的全部内容，按时间顺序。
+    /// Everything currently held, in chronological order.
     func snapshot() -> [Float] {
         let w = written.load(ordering: .acquiring)
         let n = min(w, capacity)
         return (0..<n).map { storage[(w - n + $0) % capacity] }
     }
 
-    /// 最近 seconds 秒，按时间顺序。
+    /// The most recent `seconds` seconds, in chronological order.
     func recent(seconds: Double) -> [Float] {
         let w = written.load(ordering: .acquiring)
         let n = min(w, capacity, Int(seconds * sampleRate))
@@ -46,6 +46,6 @@ final class RollingRecorder: @unchecked Sendable {
         samples.withUnsafeBufferPointer { buf.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buf)
-        file.close() // 显式收尾，确保 wav 头里的长度写对
+        file.close() // Close explicitly so the length in the WAV header is written correctly
     }
 }

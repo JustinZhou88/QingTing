@@ -10,7 +10,7 @@ struct QingTingWidgets: WidgetBundle {
     }
 }
 
-/// 「正在收听」：灵动岛（收起/展开/最小）和锁屏横幅
+/// "Listening": Dynamic Island (compact / expanded / minimal) and the Lock Screen banner
 struct ListeningLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: ListeningAttributes.self) { context in
@@ -103,7 +103,7 @@ private struct StopButton: View {
     }
 }
 
-/// 一排上下对称的竖条，均匀铺满可用宽度。实时活动里不能连续动画，所以是每次更新时的静态快照。
+/// A row of vertically symmetric bars spread evenly across the available width. Live Activities cannot animate continuously, so this is a static snapshot per update.
 private struct WaveBars: View {
     let levels: [Float]
     let barWidth: CGFloat
@@ -119,7 +119,7 @@ private struct WaveBars: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            // 每秒一次数据更新，用接近 1 秒的过渡把竖条平滑推到新高度
+            // Data arrives once a second; a transition of nearly 1 s moves the bars smoothly to their new heights
             .animation(.easeInOut(duration: 0.9), value: levels)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
         }

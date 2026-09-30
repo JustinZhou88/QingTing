@@ -1,9 +1,9 @@
 import Foundation
 
-/// 追加写 ~/Library/Logs/QingTing.log，排查"没声音"之类的问题用。
+/// Appends to ~/Library/Logs/QingTing.log, for diagnosing problems such as "no sound".
 enum Log {
     #if os(iOS)
-    /// iPhone：放在 App 的「文稿」里，「文件」App → 我的 iPhone → 清听 能看到
+    /// iPhone: stored in the app's Documents folder, visible in the Files app under On My iPhone > QingTing
     static let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("QingTing.log")
     #else

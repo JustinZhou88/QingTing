@@ -46,33 +46,34 @@ index c0f3271..6a832ba 100644
  ndarray-rand = { version = "^0.14", optional = true }
  rayon = { version = "1.5", optional = true }
 diff --git a/libDF/src/capi.rs b/libDF/src/capi.rs
-index 37f9afd..b738be5 100644
+index 37f9afd..d7db3bd 100644
 --- a/libDF/src/capi.rs
 +++ b/libDF/src/capi.rs
-@@ -251,3 +251,13 @@ pub unsafe extern "C" fn df_gain_size(st: *const DFState) -> DynArray {
+@@ -251,3 +251,14 @@ pub unsafe extern "C" fn df_gain_size(st: *const DFState) -> DynArray {
  pub unsafe extern "C" fn df_free(model: *mut DFState) {
      let _ = Box::from_raw(model);
  }
 +
 +
-+/// 清听补丁：ERB 增益的释放平滑。每帧（10ms）增益最多下降 `db_per_frame` dB，上升不限。
-+/// 模型的增益逐帧抖动，远场低信噪比人声会在字中间被瞬间压下去，听感一顿一顿；
-+/// 限制下降速度能填平这些瞬间凹陷，持续噪声仍会在约 100ms 内被压下去。0 = 关闭。
++/// QingTing patch: release smoothing of the gains. Per 10 ms frame the gain may drop by at most
++/// `db_per_frame` dB; rises are not limited. The model's gains jitter from frame to frame, so distant,
++/// low-SNR speech gets pushed down for an instant in the middle of a word and sounds choppy. Limiting
++/// the drop rate fills these dips, while sustained noise is still suppressed within about 100 ms. 0 = off.
 +#[no_mangle]
 +pub unsafe extern "C" fn df_set_gain_release(st: *mut DFState, db_per_frame: f32) {
 +    let state = st.as_mut().expect("Invalid pointer");
 +    state.m.gain_release = if db_per_frame > 0. { 10f32.powf(-db_per_frame / 20.) } else { 0. };
 +}
 diff --git a/libDF/src/tract.rs b/libDF/src/tract.rs
-index b39a987..a59a556 100644
+index b39a987..5198aee 100644
 --- a/libDF/src/tract.rs
 +++ b/libDF/src/tract.rs
 @@ -218,6 +218,8 @@ pub struct DfTract {
      pub max_db_erb_thresh: f32,
      pub max_db_df_thresh: f32,
      pub reduce_mask: ReduceMask,
-+    pub gain_release: f32, // 清听补丁：每个频点的增益每帧最多下降到上一帧的这个倍数，0 = 关闭
-+    pub prev_gains: Vec<f32>, // 清听补丁：上一帧各频点的增益
++    pub gain_release: f32, // QingTing patch: per frame, each bin's gain may fall to at most this fraction of its previous value; 0 = off
++    pub prev_gains: Vec<f32>, // QingTing patch: per-bin gains of the previous frame
      pub atten_lim: Option<f32>,
      pub df_states: Vec<DFState>,
      pub spec_buf: Tensor, // Real-valued spectrogram buffer of shape [n_ch, 1, 1, n_freqs, 2]
@@ -85,12 +86,13 @@ index b39a987..a59a556 100644
          };
          m.init()?;
          #[cfg(feature = "timings")]
-@@ -622,6 +626,31 @@ impl DfTract {
+@@ -622,6 +626,32 @@ impl DfTract {
              );
          }
  
-+        // 清听补丁：释放平滑。逐频点比较增强前后幅度，增益每帧最多降到上一帧的 gain_release 倍，
-+        // 填平远场人声字中间的瞬间凹陷；上升不受限，持续噪声仍会逐帧被压下去。
++        // QingTing patch: release smoothing. Compare magnitudes before and after enhancement per bin and
++        // let the gain fall to at most `gain_release` times its previous value each frame. This fills the
++        // momentary dips in distant speech; rises are unlimited, so sustained noise is still pushed down.
 +        if self.gain_release > 0. {
 +            let noisy = spec_noisy.as_slice().unwrap();
 +            let enh = spec_enh.as_slice_mut().unwrap();

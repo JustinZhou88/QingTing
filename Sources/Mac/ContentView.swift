@@ -1,7 +1,7 @@
 import SwiftUI
 
-// 界面按 macOS「系统设置」的样式：分组表单、彩色小图标、说明写在每组下方。
-// 结构与 iPhone 版对应。
+// The UI follows the look of macOS System Settings: grouped form, small colored icons, explanations under each group.
+// The structure mirrors the iPhone version.
 
 struct ContentView: View {
     @EnvironmentObject var audio: AudioController
@@ -135,7 +135,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 顶部状态
+// MARK: - Status header
 
 private struct HeroView: View {
     @EnvironmentObject var audio: AudioController
@@ -181,9 +181,9 @@ private struct HeroView: View {
     }
 }
 
-// MARK: - 组件
+// MARK: - Components
 
-/// 「系统设置」式的行标签：彩色圆角方块里放白色图标
+/// Row label in the style of System Settings: a white symbol on a colored rounded square
 struct SettingsLabel: View {
     let title: String
     let symbol: String

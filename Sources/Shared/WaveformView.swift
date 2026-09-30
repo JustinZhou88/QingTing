@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// 电平历史：每次刷新电平表时追加一个值，只保留最近 capacity 个（20Hz × 64 ≈ 3 秒）。
+/// Level history: one value is appended per meter refresh, keeping only the most recent `capacity` (20 Hz x 64 = about 3 s).
 struct LevelHistory {
     static let capacity = 64
     private(set) var values: [Float] = Array(repeating: 0, count: LevelHistory.capacity)
 
-    /// dBFS 线性映射到 0...1：-60dB 以下为空，-12dB 以上为满。
-    /// 不用开方：开方会把大声段压扁，嘈杂课堂里原始收音的几 dB 说话起伏就看不出来了。
+    /// Maps dBFS linearly to 0...1: empty below -60 dB, full above -12 dB.
+    /// No square root: it flattens loud passages, hiding the few dB of speech movement in the raw capture of a noisy classroom.
     mutating func append(dB: Float) {
         values.removeFirst()
         values.append(max(0, min(1, (dB + 60) / 48)))
@@ -17,7 +17,7 @@ struct LevelHistory {
     }
 }
 
-/// 语音备忘录式的滚动声纹：竖条上下对称，最新的在最右边，越旧越淡。
+/// Scrolling waveform in the style of Voice Memos: bars symmetric around the center line, newest on the right, fading with age.
 struct WaveformView: View {
     let levels: [Float]
     var color: Color = .accentColor
@@ -35,7 +35,7 @@ struct WaveformView: View {
                 let x = size.width - CGFloat(count - i) * step + spacing
                 let h = max(barWidth, CGFloat(level) * size.height)
                 let rect = CGRect(x: x, y: midY - h / 2, width: barWidth, height: h)
-                // 越旧越淡
+                // Older bars are fainter
                 let age = Double(i) / Double(max(count - 1, 1))
                 context.fill(Path(roundedRect: rect, cornerRadius: barWidth / 2),
                              with: .color(color.opacity(0.35 + 0.65 * age)))
@@ -45,7 +45,7 @@ struct WaveformView: View {
     }
 }
 
-/// 带标题的一行声纹
+/// One labeled waveform row
 struct WaveformRow: View {
     let label: String
     let levels: [Float]

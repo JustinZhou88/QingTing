@@ -1,12 +1,12 @@
 import Accelerate
 import AVFoundation
 
-/// 离线对比：`QingTing --offline 录音.wav [--out 目录] [--mode classroom] [--strength 1] [--engines deepFilter,rnnoise] [--nochain]`
-/// 把一段录音按实时链路（降噪引擎 → EQ → Apple 隔离 → 压缩 → 限幅）逐个引擎处理，
-/// 输出 wav 供试听，并打印延迟、底噪降低、人声被抹掉的比例。
+/// Offline comparison: `QingTing --offline recording.wav [--out dir] [--mode classroom] [--strength 1] [--engines deepFilter,rnnoise] [--nochain]`
+/// Runs a recording through the same chain as live use (denoiser -> EQ -> Apple isolation -> compressor -> limiter), once per engine,
+/// writes a WAV for each to listen to, and prints latency, noise floor reduction and the share of speech that was wiped out.
 enum OfflineTool {
     static let sampleRate = 48000.0
-    /// 离线渲染时是否开自动增益（与 App 里的"自动音量"开关对应）
+    /// Whether auto gain is on during offline rendering (mirrors the "auto volume" switch in the app)
     nonisolated(unsafe) static var autoGain = true
 
     static func run() {
@@ -14,7 +14,7 @@ enum OfflineTool {
         func value(after flag: String) -> String? {
             args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
         }
-        guard let path = value(after: "--offline") else { print("用法：--offline 录音.wav"); exit(1) }
+        guard let path = value(after: "--offline") else { print("usage: --offline recording.wav"); exit(1) }
         let inURL = URL(fileURLWithPath: path)
         let outDir = URL(fileURLWithPath: value(after: "--out") ?? inURL.deletingLastPathComponent().path)
         let mode = value(after: "--mode").flatMap(ListeningMode.init) ?? .classroom
@@ -25,13 +25,13 @@ enum OfflineTool {
 
         do {
             let input = try readMono48k(inURL)
-            print(String(format: "输入 %.1f 秒，场景 %@，强度 %.0f%%", Double(input.count) / sampleRate, mode.title, strength * 100))
-            print("引擎                      延迟     底噪降低  语音段电平  被抹掉的语音段  实时倍速")
+            print(String(format: "Input %.1f s, scene %@, strength %.0f%%", Double(input.count) / sampleRate, mode.rawValue, strength * 100))
+            print("engine            latency   floor reduction   speech level   speech wiped   realtime")
             let inStats = levelStats(input)
             for engine in engines {
                 let t0 = Date()
                 let denoised = try denoise(input, engine: engine, strength: strength)
-                // --nochain：只看降噪引擎本身（测延迟用）；Apple 引擎本身就在处理链里，仍需渲染
+                // --nochain: look at the denoiser alone (for latency measurement). The Apple engines live in the chain, so they are still rendered
                 let out = args.contains("--nochain") && engine.isFrameBased
                     ? denoised : try renderChain(denoised, engine: engine, mode: mode, strength: strength)
                 let speed = Double(input.count) / sampleRate / Date().timeIntervalSince(t0)
@@ -39,26 +39,26 @@ enum OfflineTool {
                 let aligned = Array(out.dropFirst(lag)) + [Float](repeating: 0, count: lag)
                 let s = levelStats(aligned)
                 let erased = erasedFraction(input: input, output: aligned, noiseFloor: inStats.floor)
-                let name = "\(inURL.deletingPathExtension().lastPathComponent)_\(engine.title).wav"
+                let name = "\(inURL.deletingPathExtension().lastPathComponent)_\(engine.rawValue).wav"
                 try write(out, to: outDir.appendingPathComponent(name))
-                print(String(format: "%@ %5.0f ms  %6.1f dB   %6.1f dBFS    %5.1f%%        %4.0fx",
-                             engine.title.padding(toLength: 16, withPad: "　", startingAt: 0),
+                print(String(format: "%@  %5.0f ms        %6.1f dB    %6.1f dBFS        %5.1f%%     %5.0fx",
+                             engine.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0),
                              Double(lag) / sampleRate * 1000,
                              (s.speech - s.floor) - (inStats.speech - inStats.floor),
                              s.speech, erased * 100, speed))
             }
-            print("输出目录：\(outDir.path)")
-            print("说明：底噪降低 = 语音与底噪的电平差比原始录音多出多少；被抹掉的语音段 = 原始录音里有声音、处理后却低于原来 25dB 以上的 100ms 片段占比。")
+            print("Output folder: \(outDir.path)")
+            print("floor reduction = how much larger the speech-to-floor level gap is than in the input; speech wiped = share of 100 ms windows that had sound in the input but ended up more than 25 dB lower after processing.")
         } catch {
-            print("失败：\(error.localizedDescription)")
+            print("Failed: \(error.localizedDescription)")
             exit(1)
         }
         exit(0)
     }
 
-    // MARK: - 处理
+    // MARK: - Processing
 
-    /// 与实时链路一致：先低切，再帧式降噪（Apple 引擎和不降噪只做低切）。
+    /// Same as the live path: low cut first, then frame-based denoising (Apple engines and "off" only get the low cut).
     static func denoise(_ input: [Float], engine: DenoiseEngine, strength: Float) throws -> [Float] {
         let x = HighPassFilter(cutoff: VoiceChain.lowCutHz, sampleRate: sampleRate).processed(input)
         guard let d = try engine.makeDenoiser() else { return x }
@@ -109,9 +109,9 @@ enum OfflineTool {
         return Array(out.prefix(x.count))
     }
 
-    // MARK: - 指标
+    // MARK: - Metrics
 
-    /// 100ms 窗口电平的第 10 百分位（底噪）和第 90 百分位（语音）。
+    /// 10th percentile (noise floor) and 90th percentile (speech) of 100 ms window levels.
     static func levelStats(_ x: [Float]) -> (floor: Float, speech: Float) {
         let w = windowLevels(x).sorted()
         guard !w.isEmpty else { return (-120, -120) }
@@ -127,18 +127,18 @@ enum OfflineTool {
         }
     }
 
-    /// 原始录音里明显高于底噪（多半是人声）的窗口中，处理后被压低超过 25dB 的比例。
+    /// Among input windows clearly above the noise floor (mostly speech), the share pushed down by more than 25 dB after processing.
     static func erasedFraction(input: [Float], output: [Float], noiseFloor: Float) -> Double {
         let a = windowLevels(input), b = windowLevels(output)
         let active = a.indices.filter { a[$0] > noiseFloor + 10 }
         guard !active.isEmpty else { return 0 }
-        // 输出整体可能被压缩/增益改过，按语音段中位数差做电平对齐
+        // The output may have been shifted overall by compression or gain, so align levels by the median difference over speech windows
         let diffs = active.map { b[$0] - a[$0] }.sorted()
         let offset = diffs[diffs.count / 2]
         return Double(active.filter { b[$0] - a[$0] - offset < -25 }.count) / Double(active.count)
     }
 
-    /// 输出相对输入的延迟（样本），用互相关在 0...200ms 里找峰。
+    /// Delay of the output relative to the input in samples, found as the cross-correlation peak within 0...200 ms.
     static func estimateLag(reference: [Float], signal: [Float]) -> Int {
         let maxLag = Int(sampleRate * 0.2), step = 8
         let n = min(reference.count, signal.count) - maxLag
@@ -154,7 +154,7 @@ enum OfflineTool {
         return best
     }
 
-    // MARK: - 文件
+    // MARK: - Files
 
     static func readMono48k(_ url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)

@@ -2,34 +2,34 @@ import AVFoundation
 import AudioToolbox
 import Synchronization
 
-/// 语音自动增益（AGC）：只在检测到人声时测量响度，把人声慢慢拉到目标电平；
-/// 停顿时增益保持不动，不会把底噪放大。放在降噪之后，解决老师转身、走动造成的忽大忽小。
+/// Speech-aware automatic gain control: measures loudness only while speech is detected and slowly moves speech to a target level;
+/// during pauses the gain is held, so the noise floor is not pumped up. Runs after noise reduction, and evens out level changes as the talker turns or walks around.
 final class AGCProcessor: @unchecked Sendable {
     struct Settings {
-        var targetDB: Float = -22      // 人声目标电平（dBFS RMS）
-        var maxGainDB: Float = 24      // 最多放大
-        var minGainDB: Float = -12     // 最多衰减
-        var riseDBPerSec: Float = 6    // 声音变小时增益上升速度
-        var fallDBPerSec: Float = 15   // 声音变大时增益下降速度（快一点，避免刺耳）
-        var integrationSec: Float = 0.4 // 人声响度的积分时间
+        var targetDB: Float = -22      // Target speech level (dBFS RMS)
+        var maxGainDB: Float = 24      // Maximum boost
+        var minGainDB: Float = -12     // Maximum cut
+        var riseDBPerSec: Float = 6    // How fast the gain rises when speech gets quieter
+        var fallDBPerSec: Float = 15   // How fast the gain falls when speech gets louder (faster, to avoid harshness)
+        var integrationSec: Float = 0.4 // Integration time of the speech loudness estimate
     }
 
     private let enabledFlag = Atomic<Bool>(true)
     private let settingsLock = Mutex(Settings())
-    /// 当前增益（dB），给界面显示
+    /// Current gain in dB, for display
     private let gainBits = Atomic<UInt32>(Float(0).bitPattern)
 
     var currentGainDB: Float { Float(bitPattern: gainBits.load(ordering: .relaxed)) }
     func setEnabled(_ on: Bool) { enabledFlag.store(on, ordering: .relaxed) }
     func update(_ change: (inout Settings) -> Void) { settingsLock.withLock { change(&$0) } }
 
-    // ---- 以下状态只在渲染线程访问
+    // ---- State below is only touched on the render thread
     private var sampleRate: Float = 48000
-    private var power: Float = 1e-8         // 约 10ms 时间常数的短时功率
-    private var floorDB: Float = -60        // 底噪跟踪
-    private var speechDB: Float = -26       // 人声响度（约 400ms 积分，只在说话时更新）
+    private var power: Float = 1e-8         // Short-term power with a time constant of about 10 ms
+    private var floorDB: Float = -60        // Noise floor tracker
+    private var speechDB: Float = -26       // Speech loudness (about 400 ms integration, updated only while speaking)
     private var gainDB: Float = 0
-    private var gain: Float = 1             // 逐样本平滑后的线性增益
+    private var gain: Float = 1             // Linear gain after per-sample smoothing
     private var counter = 0
     private var active = Settings()
 
@@ -44,10 +44,10 @@ final class AGCProcessor: @unchecked Sendable {
         counter = 0
     }
 
-    /// 原地处理单声道样本。
+    /// Processes mono samples in place.
     func process(_ x: UnsafeMutablePointer<Float>, count: Int) {
         guard enabledFlag.load(ordering: .relaxed) else {
-            // 关闭时把增益平滑地回到 0dB
+            // When disabled, smoothly return the gain to 0 dB
             for i in 0..<count {
                 gain += (1 - gain) * 0.001
                 x[i] *= gain
@@ -57,7 +57,7 @@ final class AGCProcessor: @unchecked Sendable {
         }
         let aPow = 1 - exp(-1 / (0.010 * sampleRate))
         let aGain = 1 - exp(-1 / (0.020 * sampleRate))
-        let step = Int(sampleRate * 0.005)   // 每 5ms 更新一次控制量
+        let step = Int(sampleRate * 0.005)   // Update the control values every 5 ms
         let dt: Float = 0.005
         for i in 0..<count {
             let s = x[i]
@@ -67,7 +67,7 @@ final class AGCProcessor: @unchecked Sendable {
                 counter = 0
                 if let s = settingsLock.withLockIfAvailable({ $0 }) { active = s }
                 let level = 10 * log10(max(power, 1e-12))
-                // 底噪：下降立刻跟上，上升很慢（3dB/s），这样人声不会被当成底噪
+                // Noise floor: follows drops immediately, rises slowly (3 dB/s), so speech is not mistaken for the floor
                 floorDB = level < floorDB ? floorDB + (level - floorDB) * 0.3 : floorDB + 3 * dt
                 let speaking = level > floorDB + 9 && level > -70
                 if speaking {
@@ -79,7 +79,7 @@ final class AGCProcessor: @unchecked Sendable {
                         gainDB = max(desired, gainDB - active.fallDBPerSec * dt)
                     }
                 }
-                // 没人说话：增益保持
+                // Nobody speaking: hold the gain
             }
             let target = powf(10, gainDB / 20)
             gain += (target - gain) * aGain
@@ -89,7 +89,7 @@ final class AGCProcessor: @unchecked Sendable {
     }
 }
 
-/// 把 AGCProcessor 包成进程内 AU，这样能像系统效果器一样插进 AVAudioEngine 的处理链。
+/// Wraps AGCProcessor as an in-process audio unit so it can be inserted into the AVAudioEngine chain like a system effect.
 final class AGCAudioUnit: AUAudioUnit {
     static let componentDescription = AudioComponentDescription(
         componentType: kAudioUnitType_Effect,
@@ -97,9 +97,9 @@ final class AGCAudioUnit: AUAudioUnit {
         componentManufacturer: 0x5154_6E67, // 'QTng'
         componentFlags: 0, componentFlagsMask: 0)
 
-    /// 进程内注册，只需一次。
+    /// In-process registration; needed only once.
     static let registered: Void = {
-        AUAudioUnit.registerSubclass(AGCAudioUnit.self, as: componentDescription, name: "清听: AGC", version: 1)
+        AUAudioUnit.registerSubclass(AGCAudioUnit.self, as: componentDescription, name: "QingTing: AGC", version: 1)
     }()
 
     let processor = AGCProcessor()
@@ -140,12 +140,12 @@ final class AGCAudioUnit: AUAudioUnit {
 
     override var internalRenderBlock: AUInternalRenderBlock {
         let processor = processor
-        // 渲染块里不能碰 self 的可变属性，先把缓冲指针取出来
+        // The render block must not touch mutable properties of self, so fetch the buffer pointer through a closure
         let getScratch = { [unowned self] in (self.scratch, self.scratchCapacity) }
         return { _, timestamp, frameCount, _, outputData, _, pullInputBlock in
             guard let pullInputBlock else { return kAudioUnitErr_NoConnection }
             let list = UnsafeMutableAudioBufferListPointer(outputData)
-            // 下游没给缓冲时用自己的
+            // Use our own buffer when downstream did not provide one
             if list.first?.mData == nil {
                 let (buf, cap) = getScratch()
                 guard let buf else { return kAudioUnitErr_Uninitialized }
@@ -158,7 +158,7 @@ final class AGCAudioUnit: AUAudioUnit {
             var flags = AudioUnitRenderActionFlags()
             let status = pullInputBlock(&flags, timestamp, frameCount, 0, outputData)
             guard status == noErr else { return status }
-            // 单声道链路；多声道时各声道用同一个处理器会互相干扰，这里只处理第一个并复制
+            // The chain is mono; with several channels a shared processor would make them interfere, so process the first and copy it
             if let p = list.first?.mData?.assumingMemoryBound(to: Float.self) {
                 processor.process(p, count: Int(frameCount))
                 for i in 1..<max(1, list.count) {

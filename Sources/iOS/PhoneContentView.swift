@@ -1,8 +1,8 @@
 import AVKit
 import SwiftUI
 
-// 界面按 iOS「设置」「健康 → 听力」的样式：原生分组列表、彩色图标、说明写在注脚里。
-// 首页只放上课时会碰的开关；引擎、手动参数、录音、诊断放在二级页面。
+// The UI follows the look of iOS Settings and Health > Hearing: native grouped list, colored icons, explanations in the footers.
+// The home screen only holds the switches used during a class; engine, manual parameters, recording and diagnostics live on a second page.
 
 struct PhoneContentView: View {
     @EnvironmentObject var audio: PhoneController
@@ -31,7 +31,7 @@ struct PhoneContentView: View {
                             .lineLimit(1)
                         RoutePicker().frame(width: 28, height: 28)
                     }
-                    // 三选一用分段按钮：点一下就选中，不弹菜单（真机上弹出菜单在运行时不好选）
+                    // A segmented control for a choice of three: one tap selects, no menu pops up (pop-up menus were hard to use on a real device while running)
                     VStack(alignment: .leading, spacing: 10) {
                         SettingsLabel("麦克风方向", symbol: "iphone.gen3", color: .gray)
                         Picker("麦克风方向", selection: $audio.micPosition) {
@@ -123,7 +123,7 @@ struct PhoneContentView: View {
 
 }
 
-/// 「自动」分组下的说明：运行时显示现场分析结果（每秒更新，所以单独订阅 meters）
+/// Footer of the "Auto" group: shows the scene analysis result while running (updates once a second, so it observes meters on its own)
 private struct AutoFooter: View {
     @EnvironmentObject var audio: PhoneController
     @ObservedObject var meters: PhoneMeters
@@ -139,7 +139,7 @@ private struct AutoFooter: View {
     }
 }
 
-// MARK: - 顶部状态卡片
+// MARK: - Status header
 
 private struct HeroView: View {
     @EnvironmentObject var audio: PhoneController
@@ -190,7 +190,7 @@ private struct HeroView: View {
     }
 }
 
-// MARK: - 二级页面
+// MARK: - Second-level page
 
 private struct AdvancedView: View {
     @EnvironmentObject var audio: PhoneController
@@ -257,7 +257,7 @@ private struct AdvancedView: View {
     }
 }
 
-/// 「设置」式的单选列表：选中项打勾，说明写在每项下面
+/// Single-choice list in the style of Settings: a checkmark on the selected item, with a description under each
 private struct EnginePicker: View {
     @EnvironmentObject var audio: PhoneController
     @Environment(\.dismiss) private var dismiss
@@ -283,7 +283,7 @@ private struct EnginePicker: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    // 正文用系统主色，只有勾是强调色（与「设置」一致）
+                    // Body text uses the primary color and only the checkmark is tinted (as in Settings)
                     .buttonStyle(.plain)
                 }
             } footer: {
@@ -306,9 +306,9 @@ private struct DiagnosticsRows: View {
     }
 }
 
-// MARK: - 组件
+// MARK: - Components
 
-/// 「设置」App 式的行标签：彩色圆角方块里放白色图标
+/// Row label in the style of the Settings app: a white symbol on a colored rounded square
 private struct SettingsLabel: View {
     let title: String
     let symbol: String
@@ -347,7 +347,7 @@ private struct ValueSlider: View {
     }
 }
 
-/// 系统的输出选择按钮（选助听器、耳机等）
+/// The system output picker button (hearing aids, headphones...)
 private struct RoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let v = AVRoutePickerView()

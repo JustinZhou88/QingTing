@@ -1,6 +1,6 @@
 #!/bin/bash
-# 构建 Mac 版：./build.sh  产物在 build/清听.app
-# 第一次需要先准备第三方库：./setup-deps.sh
+# Build the Mac app: ./build.sh  (output: build/清听.app)
+# Before the first build, prepare the third-party libraries: ./setup-deps.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 

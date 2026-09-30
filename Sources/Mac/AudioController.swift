@@ -7,7 +7,7 @@ final class AudioController: ObservableObject {
     @Published private(set) var outputs: [AudioDevice] = []
     @Published var inputUID: String = "" { didSet { settingsChanged(restart: true) } }
     @Published var outputUID: String = "" { didSet { settingsChanged(restart: true) } }
-    // 每个参数只更新自己对应的那一处：拖滑块时不要连带重设整套预设
+    // Each parameter updates only its own part of the chain: dragging a slider must not reapply the whole preset
     @Published var mode: ListeningMode = .classroom {
         didSet { if !restoring { pipeline.chain.apply(mode.preset) }; settingsChanged() }
     }
@@ -18,12 +18,12 @@ final class AudioController: ObservableObject {
     @Published var volumeDB: Double = 0 {
         didSet { if !restoring { pipeline.chain.setVolume(Float(volumeDB)) }; settingsChanged() }
     }
-    /// 自动调参：每秒分析最近 8 秒收音，自动设降噪强度和清晰度
+    /// Auto tuning: analyzes the last 8 seconds of capture once a second and sets noise reduction strength and clarity
     @Published var autoTune = true { didSet { settingsChanged() } }
     @Published private(set) var sceneSummary: String?
 
     @Published var clarityDB: Double = 6 {
-        // 没在播放时直接生效；播放中由 updateMeters 里的 rampClarity 慢慢过渡，避免咔嗒声
+        // Takes effect immediately when not running; while running, rampClarity in updateMeters moves there gradually to avoid clicks
         didSet { if !restoring { pipeline.chain.setClarity(Float(clarityDB), immediately: !isRunning) }; settingsChanged() }
     }
     @Published var autoGain = true {
@@ -59,12 +59,12 @@ final class AudioController: ObservableObject {
         if defaults.object(forKey: "autoGain") != nil { autoGain = defaults.bool(forKey: "autoGain") }
         if defaults.object(forKey: "clarityDB") != nil { clarityDB = defaults.double(forKey: "clarityDB") }
         if defaults.object(forKey: "autoTune") != nil { autoTune = defaults.bool(forKey: "autoTune") }
-        // 收音端加了低切之后，同样的降噪效果只需要以前一半左右的强度，升级时重置一次
+        // With the low cut on the capture side, the same result needs only about half the previous strength; reset once on upgrade
         if !defaults.bool(forKey: "migratedLowCut") {
             strength = 0.5
             defaults.set(true, forKey: "migratedLowCut")
         }
-        // 加入自动音量后，旧版为了听清而拉高的音量会让限幅器一直在压，升级时重置一次
+        // With auto volume, the volume that older versions needed raised would keep the limiter working constantly; reset once on upgrade
         if !defaults.bool(forKey: "migratedAGC") {
             volumeDB = 0
             defaults.set(true, forKey: "migratedAGC")
@@ -78,23 +78,23 @@ final class AudioController: ObservableObject {
         pipeline.onConfigurationChange = { [weak self] in
             Task { @MainActor in self?.configurationChanged() }
         }
-        Log.write("启动 App；收音=\(selectedInput?.name ?? "无") 输出=\(selectedOutput?.name ?? "无") 场景=\(mode.title) 引擎=\(engine.title) 降噪=\(Int(strength * 100))% 音量=\(volumeDB)dB")
+        Log.write("App launched; input=\(selectedInput?.name ?? "none") output=\(selectedOutput?.name ?? "none") scene=\(mode.rawValue) engine=\(engine.rawValue) strength=\(Int(strength * 100))% volume=\(volumeDB)dB")
     }
 
     var selectedInput: AudioDevice? { inputs.first { $0.uid == inputUID } }
     var selectedOutput: AudioDevice? { outputs.first { $0.uid == outputUID } }
 
-    /// 同一台 Mac 的麦克风 + 扬声器会形成回授啸叫。
+    /// The microphone and speakers of the same Mac would feed back and howl.
     var feedbackRisk: Bool {
         guard let i = selectedInput, let o = selectedOutput else { return false }
         return i.isBuiltIn && o.isBuiltIn
     }
 
-    func toggle() { isRunning ? stop(reason: "用户点停止") : start() }
+    func toggle() { isRunning ? stop(reason: "stop pressed") : start() }
 
     func start() {
         errorMessage = nil
-        Log.write("用户点开始；麦克风权限状态=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
+        Log.write("Start pressed; microphone authorization=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
         Task {
             guard await AVCaptureDevice.requestAccess(for: .audio) else {
                 fail("没有麦克风权限：请到 系统设置 → 隐私与安全性 → 麦克风 里允许「清听」")
@@ -106,7 +106,7 @@ final class AudioController: ObservableObject {
 
     private func fail(_ message: String) {
         errorMessage = message
-        Log.write("错误：\(message)")
+        Log.write("Error: \(message)")
     }
 
     private func startNow() {
@@ -119,10 +119,10 @@ final class AudioController: ObservableObject {
             isRunning = true
             errorMessage = nil
             glitches = 0
-            Log.write("已开始：\(input.name) → \(output.name)，引擎 \(engine.title)，固定延迟≈\(Int(pipeline.baseLatency * 1000))ms")
-            // 防止 App Nap 和系统降频打断实时音频
+            Log.write("Started: \(input.name) -> \(output.name), engine \(engine.rawValue), fixed latency ~\(Int(pipeline.baseLatency * 1000)) ms")
+            // Keep App Nap and CPU throttling from interrupting real-time audio
             activity = ProcessInfo.processInfo.beginActivity(
-                options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled], reason: "实时助听")
+                options: [.userInitiated, .latencyCritical, .idleSystemSleepDisabled], reason: "Real-time hearing assistance")
             meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.updateMeters() }
             }
@@ -137,7 +137,7 @@ final class AudioController: ObservableObject {
     }
 
     func stop(reason: String) {
-        Log.write("停止：\(reason)")
+        Log.write("Stopped: \(reason)")
         resumeWhenAvailable = false
         pipeline.stop()
         meterTimer?.invalidate()
@@ -161,27 +161,27 @@ final class AudioController: ObservableObject {
         do {
             let dir = try pipeline.saveRecent(note: note)
             savedMessage = "已保存最近 30 秒到 文稿/清听录音"
-            Log.write("保存录音：\(dir.path) \(note)")
+            Log.write("Saved recording: \(dir.path) \(note)")
             NSWorkspace.shared.activateFileViewerSelecting([dir])
         } catch {
             fail("保存失败：\(error.localizedDescription)")
         }
     }
 
-    // MARK: - 自动调参
+    // MARK: - Auto tuning
 
     private var tuneTimer: Timer?
-    private let analysisQueue = DispatchQueue(label: "清听.现场分析", qos: .utility)
+    private let analysisQueue = DispatchQueue(label: "qingting.scene-analysis", qos: .utility)
     private var analyzer: SceneAnalyzer?
     private var lastScene: SceneAnalyzer.Estimate?
 
-    /// 每秒一次：后台分析最近 8 秒原始收音，参数朝目标平滑靠拢（时间常数约 4 秒），
-    /// 没人说话时保持不动。
+    /// Once a second: analyze the last 8 seconds of raw capture in the background and move the parameters smoothly toward the target (time constant about 4 s);
+    /// they stay put when nobody is speaking.
     private func autoTuneTick() {
         guard autoTune, !bypass, let recorder = pipeline.rawRecorder else { return }
         if analyzer?.sampleRate != recorder.sampleRate { analyzer = SceneAnalyzer(sampleRate: recorder.sampleRate) }
         guard let analyzer else { return }
-        // 分析器只在这个串行队列里用
+        // The analyzer is only used on this serial queue
         nonisolated(unsafe) let a = analyzer
         analysisQueue.async { [weak self] in
             let estimate = a.analyze(recorder.recent(seconds: 8))
@@ -198,7 +198,7 @@ final class AudioController: ObservableObject {
         lastScene = e
         let target = SceneAnalyzer.params(for: e, agcGainDB: autoGain ? pipeline.chain.agc.currentGainDB : 0)
         let k = 0.25
-        // 只有引擎是 DeepFilterNet/RNNoise/Apple 时强度才有意义；不降噪时不动它
+        // Strength only matters for DeepFilterNet/RNNoise/Apple; leave it alone when denoising is off
         if engine != .off {
             let s = strength + (Double(target.strength) - strength) * k
             if abs(s - strength) > 0.005 { strength = (s * 100).rounded() / 100 }
@@ -212,8 +212,8 @@ final class AudioController: ObservableObject {
     private var restartTimes: [Date] = []
     private var restartScheduled = false
 
-    /// 音频设备配置变化（换设备、采样率变、蓝牙重连）。合并 0.3 秒内的连续通知再重启，
-    /// 10 秒内重启超过 5 次说明在来回抖，停下报错而不是无限重启。
+    /// Audio device configuration changed (device switched, sample rate changed, Bluetooth reconnected). Coalesces notifications within 0.3 s before restarting;
+    /// more than 5 restarts in 10 s means it is flapping, so stop with an error instead of restarting forever.
     private func configurationChanged() {
         guard isRunning, !restartScheduled else { return }
         restartScheduled = true
@@ -223,7 +223,7 @@ final class AudioController: ObservableObject {
             let now = Date()
             restartTimes = restartTimes.filter { now.timeIntervalSince($0) < 10 } + [now]
             if restartTimes.count > 5 {
-                stop(reason: "设备配置反复变化")
+                stop(reason: "device configuration keeps changing")
                 fail("音频设备反复变化，已停止。请重新点开始。")
                 return
             }
@@ -233,12 +233,12 @@ final class AudioController: ObservableObject {
 
     private func restartIfRunning() {
         guard isRunning else { return }
-        Log.write("重启音频链路")
+        Log.write("Restarting the audio path")
         pipeline.stop()
         isRunning = false
         startNow()
         if !isRunning, errorMessage != nil {
-            // 多半是设备刚断开，等它回来
+            // Most likely the device just disconnected; wait for it to come back
             resumeWhenAvailable = true
         }
     }
@@ -250,14 +250,14 @@ final class AudioController: ObservableObject {
         if Date().timeIntervalSince(lastStatLog) > 3, let c = pipeline.consumer {
             lastStatLog = Date()
             if autoTune, let e = lastScene {
-                Log.write(String(format: "现场 信噪比 %.1f 高频信噪比 %.1f 高频倾斜 %.1f 说话占比 %.0f%% → 降噪 %.0f%% 清晰度 %.1f",
+                Log.write(String(format: "scene snr %.1f hf-snr %.1f tilt %.1f speech %.0f%% -> strength %.0f%% clarity %.1f",
                                  e.speechSNR, e.highSNR, e.tilt, e.speechFraction * 100, strength * 100, clarityDB))
             }
-            Log.write(String(format: "运行中 收音 %.0f dBFS  送出 %.0f dBFS  积压 %.0f ms  欠载 %d  跳帧 %d  %@ %d%%  每帧 %dµs  旁路 %@",
+            Log.write(String(format: "running in %.0f dBFS  out %.0f dBFS  backlog %.0f ms  underruns %d  skips %d  %@ %d%%  frame %d us  bypass %@",
                              pipeline.inputMeter.dBFS, pipeline.outputMeter.dBFS, pipeline.bufferedMs,
                              c.underruns.load(ordering: .relaxed), c.drops.load(ordering: .relaxed),
-                             engine.title + String(format: " 自动增益%+.0fdB", pipeline.chain.agc.currentGainDB), Int(strength * 100),
-                             pipeline.worker?.lastFrameMicros.load(ordering: .relaxed) ?? 0, bypass ? "开" : "关"))
+                             engine.rawValue + String(format: " agc %+.0f dB", pipeline.chain.agc.currentGainDB), Int(strength * 100),
+                             pipeline.worker?.lastFrameMicros.load(ordering: .relaxed) ?? 0, bypass ? "on" : "off"))
         }
         inputDB = pipeline.inputMeter.dBFS
         outputDB = pipeline.outputMeter.dBFS
@@ -271,14 +271,14 @@ final class AudioController: ObservableObject {
         }
     }
 
-    // MARK: - 设备
+    // MARK: - Devices
 
     func refreshDevices() {
         let all = AudioDevices.all()
         inputs = all.filter { $0.inputChannels > 0 }
         outputs = all.filter { $0.outputChannels > 0 }
 
-        // 只在从没选过时自动挑；选过的设备暂时断开也保留选择，重连后接着用
+        // Auto-pick only when nothing was ever chosen; a chosen device that is temporarily gone stays selected and is used again when it returns
         if inputUID.isEmpty {
             let saved = defaults.string(forKey: "inputUID")
             inputUID = (inputs.first { $0.uid == saved } ?? inputs.first { $0.isBuiltIn } ?? inputs.first)?.uid ?? ""
@@ -292,25 +292,25 @@ final class AudioController: ObservableObject {
         }
     }
 
-    /// 因设备断开而停下的，设备回来后自动恢复。
+    /// Stopped because a device disconnected; resumes automatically when it returns.
     private var resumeWhenAvailable = false
 
     private func devicesChanged() {
         refreshDevices()
         let available = selectedInput != nil && selectedOutput != nil
         if isRunning, !available {
-            // 正在用的设备消失（比如助听器断开）：停下，别让声音跑到别的设备
-            stop(reason: "设备断开")
-            resumeWhenAvailable = true // stop() 会清掉，这里重新置上
+            // A device in use disappeared (e.g. hearing aids disconnected): stop, so the sound does not end up on another device
+            stop(reason: "device disconnected")
+            resumeWhenAvailable = true // stop() clears it, so set it again here
             errorMessage = "设备已断开，重新连接后会自动继续"
         } else if resumeWhenAvailable, available {
             resumeWhenAvailable = false
-            Log.write("设备已恢复，自动继续")
+            Log.write("Device is back; resuming")
             startNow()
         }
     }
 
-    // MARK: - 参数
+    // MARK: - Settings
 
     private func settingsChanged(restart: Bool = false) {
         guard !restoring else { return }

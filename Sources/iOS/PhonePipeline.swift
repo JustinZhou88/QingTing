@@ -1,6 +1,6 @@
 import AVFoundation
 
-/// iPhone 麦克风朝向（对应 AVAudioSession 的数据源）
+/// Which way the iPhone microphone faces (maps to an AVAudioSession data source)
 enum MicPosition: String, CaseIterable, Identifiable {
     case back, front, bottom
     var id: String { rawValue }
@@ -20,7 +20,7 @@ enum MicPosition: String, CaseIterable, Identifiable {
     }
 }
 
-/// 麦克风指向模式
+/// Microphone polar pattern
 enum MicPattern: String, CaseIterable, Identifiable {
     case cardioid, omni
     var id: String { rawValue }
@@ -44,8 +44,8 @@ enum PhonePipelineError: LocalizedError {
     }
 }
 
-/// iPhone 管线：内置麦克风 → 低切 →（帧式降噪线程）→ 处理链 → 助听器。
-/// 与 Mac 版不同，收音和输出在同一个 AVAudioEngine、同一个硬件时钟上，中间缓冲可以很小。
+/// iPhone pipeline: built-in microphone -> low cut -> (frame-based denoise thread) -> processing chain -> hearing aids.
+/// Unlike the Mac version, capture and output share one AVAudioEngine and one hardware clock, so the buffer in between can be very small.
 final class PhonePipeline {
     let chain = VoiceChain()
     let inputMeter = LevelMeter()
@@ -60,37 +60,37 @@ final class PhonePipeline {
     private var scratch: UnsafeMutablePointer<Float>?
     private var upScratch: UnsafeMutablePointer<Float>?
 
-    // MARK: - 音频会话
+    // MARK: - Audio session
 
-    /// 配置会话并选麦克风。返回实际生效的麦克风描述。
+    /// Configures the session and selects the microphone. Returns a description of the microphone actually in effect.
     @discardableResult
     func configureSession(position: MicPosition, pattern: MicPattern) throws -> String {
         let session = AVAudioSession.sharedInstance()
-        // playAndRecord：同时收音和放音；不加 defaultToSpeaker，声音不会被强制送到扬声器
+        // playAndRecord: capture and play at the same time. Without defaultToSpeaker, audio is not forced to the speaker
         try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothA2DP])
         try session.setPreferredSampleRate(48000)
         try session.setPreferredIOBufferDuration(0.005)
         try session.setActive(true)
 
-        // 13 mini 上收音电平偏低（自动增益顶到 +24dB）。系统允许的话把麦克风输入增益开到最大；
-        // 不少设备在蓝牙输出时不开放这个设置，所以也把实际值记下来方便排查。
+        // Capture level is low on a 13 mini (auto gain pinned at +24 dB). Raise the microphone input gain to maximum when the system allows it;
+        // many devices do not expose this setting with a Bluetooth output, so the actual value is logged for troubleshooting.
         if session.isInputGainSettable {
             try? session.setInputGain(1.0)
         }
-        Log.write(String(format: "会话采样率 %.0f Hz，输入增益 %.2f（%@）", session.sampleRate, session.inputGain,
-                         session.isInputGainSettable ? "可调" : "系统不允许调"))
+        Log.write(String(format: "Session sample rate %.0f Hz, input gain %.2f (%@)", session.sampleRate, session.inputGain,
+                         session.isInputGainSettable ? "settable" : "not settable"))
 
         guard let mic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else {
             throw PhonePipelineError.noBuiltInMic
         }
-        // 一定用 iPhone 自己的麦克风，而不是助听器或耳机上的
+        // Always use the iPhone's own microphone, never the one on the hearing aids or a headset
         try session.setPreferredInput(mic)
         for s in mic.dataSources ?? [] {
-            Log.write("麦克风 \(s.dataSourceName)：支持 \((s.supportedPolarPatterns ?? []).map(Self.patternName).joined(separator: "/"))")
+            Log.write("Microphone \(s.dataSourceName): supports \((s.supportedPolarPatterns ?? []).map(\.rawValue).joined(separator: "/"))")
         }
         if let source = mic.dataSources?.first(where: { $0.orientation == position.orientation }) {
             let supported = source.supportedPolarPatterns ?? []
-            // 想要指向时，按 心形 → 亚心形 的顺序取这个麦克风支持的；都不支持就只能全向
+            // For directional pickup, take cardioid, then subcardioid, whichever this microphone supports; if neither, it has to be omnidirectional
             let wanted: [AVAudioSession.PolarPattern] = pattern == .cardioid ? [.cardioid, .subcardioid] : [.omnidirectional]
             if let p = wanted.first(where: supported.contains) {
                 try source.setPreferredPolarPattern(p)
@@ -108,7 +108,7 @@ final class PhonePipeline {
         return micDescription
     }
 
-    /// 当前麦克风是否支持指向模式；实际是否已经是指向模式
+    /// Whether the current microphone supports a directional pattern, and whether one is actually in effect
     private(set) var directionalAvailable = true
     private(set) var isDirectional = false
 
@@ -132,8 +132,8 @@ final class PhonePipeline {
         }
     }
 
-    /// 当前输出设备名；以及它是不是 iPhone 自己的扬声器/听筒。
-    /// 内置设备的系统名称会随系统语言变（如英文系统显示 Speaker），统一改成中文。
+    /// Name of the current output device, and whether it is the iPhone's own speaker or receiver.
+    /// The system name of built-in devices follows the system language (e.g. "Speaker" on an English system), so a fixed name is used for the UI.
     static var currentOutput: (name: String, isBuiltIn: Bool) {
         guard let out = AVAudioSession.sharedInstance().currentRoute.outputs.first else { return ("未连接", true) }
         switch out.portType {
@@ -143,7 +143,7 @@ final class PhonePipeline {
         }
     }
 
-    // MARK: - 启停
+    // MARK: - Start and stop
 
     func start(engineKind: DenoiseEngine, strength: Float, allowBuiltInOutput: Bool = false) throws {
         stop()
@@ -157,17 +157,17 @@ final class PhonePipeline {
         else { throw PhonePipelineError.badFormat }
         let sampleRate = hw.sampleRate
         let channels = Int(hw.channelCount)
-        Log.write("收音格式 \(sampleRate)Hz×\(channels)，麦克风 \(micDescription)，输出 \(output.name)")
+        Log.write("Capture format \(sampleRate) Hz x\(channels), microphone \(micDescription), output \(output.name)")
 
-        // 帧式降噪（DeepFilterNet/RNNoise）只认 48kHz。收音不是 48kHz 时按整数倍升采样（如 16kHz ×3），
-        // 后面的缓冲、处理链都按 48kHz 跑，最后由混音器转成输出设备的采样率。
+        // Frame-based denoisers (DeepFilterNet/RNNoise) only accept 48 kHz. When capture is not 48 kHz it is upsampled by an integer factor (e.g. 16 kHz x3);
+        // the buffers and the chain then run at 48 kHz, and the mixer converts to the output device's rate at the end.
         var upsampler: Upsampler?
         var pipelineRate = sampleRate
         if engineKind.isFrameBased, sampleRate != 48000 {
             guard let factor = Upsampler.factor(from: sampleRate) else { throw PhonePipelineError.needs48k(sampleRate) }
             upsampler = Upsampler(factor: factor)
             pipelineRate = 48000
-            Log.write("收音是 \(Int(sampleRate))Hz，升采样 ×\(factor) 到 48kHz 再降噪")
+            Log.write("Capture is \(Int(sampleRate)) Hz; upsampling x\(factor) to 48 kHz before noise reduction")
         }
         let upFactor = upsampler?.factor ?? 1
         let upScratch = UnsafeMutablePointer<Float>.allocate(capacity: 16384 * upFactor)
@@ -187,7 +187,7 @@ final class PhonePipeline {
         let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 16384)
         let inputMeter = inputMeter
 
-        // 收音：下混成单声道 → 电平/录音 → 低切 → 进环形缓冲（或降噪线程）
+        // Capture: downmix to mono -> meter/recorder -> low cut -> ring buffer (or the denoise thread)
         let sink = AVAudioSinkNode { _, frameCount, abl in
             let frames = min(Int(frameCount), 16384)
             let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: abl))
@@ -216,7 +216,7 @@ final class PhonePipeline {
         engine.attach(sink)
         engine.connect(engine.inputNode, to: sink, format: hwFormat)
 
-        // 输出：从环形缓冲取 → 处理链 → 混音器 → 助听器
+        // Output: pull from the ring buffer -> chain -> mixer -> hearing aids
         let mono = AVAudioFormat(standardFormatWithSampleRate: pipelineRate, channels: 1)!
         let source = AVAudioSourceNode(format: mono) { _, _, frameCount, abl in
             for buf in UnsafeMutableAudioBufferListPointer(abl) {
@@ -259,7 +259,7 @@ final class PhonePipeline {
         self.upScratch = upScratch
         let session = AVAudioSession.sharedInstance()
         baseLatency = session.inputLatency + session.outputLatency + 2 * session.ioBufferDuration + engineKind.latency
-        Log.write(String(format: "会话延迟：输入 %.1f ms，输出 %.1f ms，IO 缓冲 %.1f ms",
+        Log.write(String(format: "Session latency: input %.1f ms, output %.1f ms, IO buffer %.1f ms",
                          session.inputLatency * 1000, session.outputLatency * 1000, session.ioBufferDuration * 1000))
     }
 
@@ -297,7 +297,7 @@ final class PhonePipeline {
         return baseLatency + Double(c.ring.fill) / c.sampleRate
     }
 
-    /// 最近 30 秒原始收音和处理后声音存到 文稿/清听录音（「文件」App 可见）。
+    /// Saves the last 30 seconds of raw capture and processed audio to Documents (visible in the Files app).
     func saveRecent(note: String) throws -> URL {
         guard let raw = rawRecorder, let processed = processedRecorder else { throw PhonePipelineError.badFormat }
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

@@ -19,13 +19,13 @@ struct AudioDevice: Identifiable, Hashable {
     var looksLikeIPhone: Bool { name.localizedCaseInsensitiveContains("iPhone") }
 }
 
-/// CoreAudio HAL 的薄封装。
+/// Thin wrapper around the CoreAudio HAL.
 enum AudioDevices {
     static func all() -> [AudioDevice] {
         let ids: [AudioDeviceID] = array(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
         return ids.compactMap { id in
             guard let uid = string(id, kAudioDevicePropertyDeviceUID) else { return nil }
-            // AVAudioEngine 自己建的私有聚合设备，不给用户选
+            // Private aggregate devices that AVAudioEngine creates for itself; not offered to the user
             if uid.hasPrefix("CADefaultDeviceAggregate") || (string(id, kAudioObjectPropertyName) ?? "").hasPrefix("CADefaultDeviceAggregate") {
                 return nil
             }
@@ -41,7 +41,7 @@ enum AudioDevices {
     static var defaultOutputID: AudioDeviceID? { scalar(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice) }
     static var defaultInputID: AudioDeviceID? { scalar(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice) }
 
-    /// 设备侧的单向延迟（秒）：硬件延迟 + 安全偏移 + 流延迟 + 一个 IO 缓冲。
+    /// One-way latency on the device side in seconds: hardware latency + safety offset + stream latency + one IO buffer.
     static func latency(_ id: AudioDeviceID, input: Bool) -> Double {
         let scope = input ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput
         let rate: Float64 = scalar(id, kAudioDevicePropertyNominalSampleRate) ?? 48000
@@ -53,7 +53,7 @@ enum AudioDevices {
         return Double(device + safety + stream + buffer) / rate
     }
 
-    /// 尽量把设备 IO 缓冲调小以降低延迟；蓝牙设备可能不接受，失败就算了。
+    /// Shrinks the device IO buffer as far as possible to cut latency. Bluetooth devices may refuse; failure is ignored.
     @discardableResult
     static func setBufferFrameSize(_ id: AudioDeviceID, _ frames: UInt32) -> Bool {
         var addr = address(kAudioDevicePropertyBufferFrameSize)
@@ -65,13 +65,13 @@ enum AudioDevices {
         scalar(id, kAudioDevicePropertyNominalSampleRate) ?? 0
     }
 
-    /// 设备插拔（如助听器断开/重连）时回调，在主线程执行。
+    /// Called on the main thread when devices come and go (e.g. hearing aids disconnecting or reconnecting).
     static func onDeviceListChange(_ handler: @escaping () -> Void) {
         var addr = address(kAudioHardwarePropertyDevices)
         AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main) { _, _ in handler() }
     }
 
-    // MARK: - 属性读写
+    // MARK: - Property access
 
     private static func address(_ selector: AudioObjectPropertySelector,
                                 scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {

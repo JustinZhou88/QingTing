@@ -1,94 +1,98 @@
-# 清听
+# QingTing (清听)
 
-<img src="Design/AppIcon-mac-1024.png" width="128" alt="清听图标">
+English | [简体中文](README.zh-CN.md)
 
-把 Mac 或 iPhone 麦克风收到的声音实时降噪，只保留人声，再通过蓝牙送到 MFi 助听器里。为坐在教室里听远处老师讲课而做。
+<img src="Design/AppIcon-mac-1024.png" width="128" alt="QingTing icon">
 
-所有处理都在本机完成，不联网。
+QingTing captures sound with the microphone of a Mac or an iPhone, removes noise in real time so that mostly speech is left, and streams the result to MFi hearing aids over Bluetooth. It was built for sitting in a classroom and listening to a teacher who is far away.
 
-> 清听不是医疗器械，不能替代助听器验配，也不保证改善听力。输出端有限幅器，但请从小音量开始试。
+All processing happens on the device. Nothing is sent over the network.
 
-## 功能
+> QingTing is not a medical device. It does not replace a hearing aid fitting and makes no promise of improving hearing. The output is limited, but start at a low volume.
 
-- **多种降噪引擎可选**：DeepFilterNet 3（默认，适合远处的人声）、DeepFilterNet 低延迟版、RNNoise、Apple 语音隔离（两种模式）、不降噪
-- **自动调参**：每秒分析最近 8 秒的收音，估计人声信噪比和高频情况，自动设置降噪强度和清晰度
-- **自动音量**：只在有人说话时测量响度，把忽大忽小的人声拉平，停顿时不放大底噪
-- **清晰度**：强调 2 kHz 以上的辅音
-- **保存最近 30 秒**：同时存原始收音和处理后的声音，用来分析问题
-- **iPhone 版**：锁屏继续工作；灵动岛和锁屏显示收听状态，可一键停止；助听器断开时自动停止，防止扬声器啸叫
-- **离线对比工具**：把一段录音用各个引擎分别处理，输出音频和指标
+The app's user interface is in Chinese.
 
-## 处理流程
+## Features
+
+- **Choice of noise reduction engines**: DeepFilterNet 3 (default, works for distant speech), a low-latency DeepFilterNet variant, RNNoise, Apple voice isolation (two modes), or none
+- **Auto tuning**: once a second it analyzes the last 8 seconds of capture, estimates the speech SNR and the high-frequency balance, and sets noise reduction strength and clarity
+- **Auto volume**: measures loudness only while someone is speaking and evens out speech that gets louder and quieter, without boosting the noise floor during pauses
+- **Clarity**: emphasizes consonants above 2 kHz
+- **Save the last 30 seconds**: stores both the raw capture and the processed audio for troubleshooting
+- **iPhone app**: keeps working with the screen locked; shows the listening state in the Dynamic Island and on the Lock Screen with a Stop button; stops automatically when the hearing aids disconnect so the speaker cannot howl
+- **Offline comparison tool**: runs a recording through every engine and outputs audio files and metrics
+
+## Signal path
 
 ```
-麦克风 → 低切 250 Hz → 降噪引擎 → 清晰度 EQ → 自动音量 → 压缩 → 限幅 → 助听器
+microphone -> 250 Hz low cut -> noise reduction -> clarity EQ -> auto volume -> compressor -> limiter -> hearing aids
 ```
 
-- 收音不是 48 kHz 时（有的 iPhone 连上助听器后只有 16 kHz），先整数倍升采样到 48 kHz 再降噪
-- 降噪在独立的实时优先级线程里做，和音频设备的回调之间用无锁环形缓冲衔接，缓冲余量会根据卡顿情况自适应
+- When capture is not at 48 kHz (some iPhones only deliver 16 kHz once hearing aids are connected), the audio is upsampled by an integer factor to 48 kHz before noise reduction
+- Noise reduction runs on its own real-time priority thread, connected to the audio device callbacks through lock-free ring buffers whose margin adapts to dropouts
 
-## 目录
+## Layout
 
-| 路径 | 内容 |
+| Path | Contents |
 |---|---|
-| `Sources/Shared` | 两个平台共用：降噪引擎封装、处理链、自动音量、现场分析、环形缓冲、声纹显示 |
-| `Sources/Mac` | Mac 版：音频设备、双引擎管线、界面、离线工具 |
-| `Sources/iOS` | iPhone 版：音频会话、管线、界面、实时活动控制 |
-| `Sources/Widget`、`Sources/LiveActivity` | 灵动岛 / 锁屏实时活动 |
-| `Patches` | 对 DeepFilterNet 的改动（补丁）和锁定的依赖版本 |
-| `Design` | 图标和绘制图标的代码 |
+| `Sources/Shared` | Shared by both platforms: engine wrappers, processing chain, auto volume, scene analysis, ring buffer, waveform view |
+| `Sources/Mac` | Mac app: audio devices, two-engine pipeline, UI, offline tool |
+| `Sources/iOS` | iPhone app: audio session, pipeline, UI, Live Activity control |
+| `Sources/Widget`, `Sources/LiveActivity` | Dynamic Island / Lock Screen Live Activity |
+| `Patches` | Changes to DeepFilterNet (as a patch) and the pinned dependency versions |
+| `Design` | The icon and the code that draws it |
 
-## 构建
+## Building
 
-需要 Apple 芯片的 Mac、Xcode、Rust（`rustup`）和 [XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）。
+Requires an Apple silicon Mac, Xcode, Rust (`rustup`) and [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 
 ```bash
-# 1. 准备第三方降噪库（下载、打补丁、编译，只需一次，约 3GB）
+# 1. Prepare the third-party noise reduction libraries (download, patch, build; once; about 3 GB)
 ./setup-deps.sh
 
-# 2. Mac 版，产物在 build/清听.app
+# 2. Mac app, output in build/清听.app
 ./build.sh
 
-# 3. iPhone 版：先在 local.env 里写上自己的开发者团队 ID
-echo 'QINGTING_TEAM_ID=你的团队ID' > local.env
-./install-ios.sh      # 编译并装到已连接的 iPhone 上
+# 3. iPhone app: put your developer team ID in local.env first
+echo 'QINGTING_TEAM_ID=<your team ID>' > local.env
+./install-ios.sh      # builds and installs on the connected iPhone
 ```
 
-iPhone 版说明：
+Notes for the iPhone app:
 
-- 需要在 Xcode → Settings → Accounts 里登录 Apple ID；免费账号签的 App 7 天后要重装一次
-- 手机用数据线配对过一次后，和 Mac 在同一个局域网（比如手机的个人热点）里也能无线安装
-- 包名在 `project.yml` 里（`PRODUCT_BUNDLE_IDENTIFIER`），自己用时改成自己的
+- Sign in with your Apple ID under Xcode > Settings > Accounts. Apps signed with a free account have to be reinstalled every 7 days
+- After the phone has been paired once over USB, it can also be installed wirelessly when the Mac and the phone are on the same local network (for example the phone's Personal Hotspot)
+- The bundle identifier is set in `project.yml` (`PRODUCT_BUNDLE_IDENTIFIER`); change it to your own
 
-## 命令行工具
+## Command line
 
-Mac 版的可执行文件带两个不需要界面的模式：
+The Mac executable has two modes that need no UI:
 
 ```bash
 APP=build/清听.app/Contents/MacOS/QingTing
 
-# 离线对比：用每个引擎处理一段录音，输出 wav 和指标
-$APP --offline 录音.wav --out 输出目录 [--mode classroom] [--strength 0.5] [--engines deepFilter,rnnoise]
+# Offline comparison: process a recording with each engine, write WAV files and print metrics
+$APP --offline recording.wav --out outdir [--mode classroom] [--strength 0.5] [--engines deepFilter,rnnoise]
 
-# 实时自检：跑几秒，打印电平、缓冲和卡顿计数（会往输出设备放音）
-$APP --selftest 5 [--engine deepFilter] [--in 麦克风名] [--out 输出设备名]
+# Live self-test: run for a few seconds and print levels, buffering and glitch counts (plays audio to the output device)
+$APP --selftest 5 [--engine deepFilter] [--in "microphone name"] [--out "output device name"]
 ```
 
-运行日志：Mac 在 `~/Library/Logs/QingTing.log`，iPhone 在「文件」App → 我的 iPhone → 清听。
+Logs: `~/Library/Logs/QingTing.log` on the Mac; on the iPhone, in the Files app under On My iPhone > 清听.
 
-## 已知限制
+## Known limitations
 
-- 延迟：Mac 约 120–130 ms，iPhone 约 80–100 ms（全向麦克风）。助听器自己的麦克风也在收音时，两份声音会有重影，建议在助听器 App 里调低串流时的环境麦克风比例
-- 单麦克风降噪主要改善听感舒适度；老师很远、教室很吵时，能提升的清晰度有限
-- iPhone 的指向收音模式实测会让声音变小、变闷，延迟多约 30 ms，默认关闭
-- 灵动岛里的声纹每秒刷新一次（系统不允许第三方 App 连续动画）
+- Latency: about 120-130 ms on the Mac and 80-100 ms on the iPhone (omnidirectional microphone). If the hearing aids' own microphones are also active, the two copies of the sound overlap; lowering the ambient microphone level during streaming in the hearing aid app helps
+- Single-microphone noise reduction mostly improves listening comfort. With a distant teacher in a noisy room, the gain in intelligibility is limited
+- Directional microphone modes on the iPhone measured quieter and duller, with about 30 ms more latency; they are off by default
+- The waveform in the Dynamic Island refreshes once a second (the system does not allow third-party apps to animate continuously there)
 
-## 第三方
+## Third-party
 
-- [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet)（MIT / Apache-2.0）：降噪模型和推理库，本项目加了增益释放平滑的补丁
-- [RNNoise](https://github.com/xiph/rnnoise)（BSD-3-Clause）
-- Apple `AUSoundIsolation`：系统自带的语音隔离
+- [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) (MIT / Apache-2.0): noise reduction model and inference library; this project adds a gain release smoothing patch
+- [RNNoise](https://github.com/xiph/rnnoise) (BSD-3-Clause)
+- Apple `AUSoundIsolation`: the system voice isolation unit
 
-## 许可
+## License
 
-本项目自己的代码以 [MIT 许可](LICENSE) 开源。第三方库按各自的许可使用，见上。
+The code of this project is released under the [MIT License](LICENSE). Third-party libraries are used under their own licenses, listed above.

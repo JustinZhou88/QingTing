@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-/// 可选的降噪引擎。
+/// Selectable noise reduction engines.
 enum DenoiseEngine: String, CaseIterable, Identifiable {
     case deepFilter, deepFilterLL, rnnoise, appleVoice, appleHQ, off
     var id: String { rawValue }
@@ -28,11 +28,11 @@ enum DenoiseEngine: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 帧式引擎在收音侧的工作线程里处理；Apple 引擎是处理链里的 AU。
+    /// Frame-based engines run on a worker thread on the capture side; the Apple engines are audio units in the chain.
     var isFrameBased: Bool { [.deepFilter, .deepFilterLL, .rnnoise].contains(self) }
 
-    /// 算法延迟（秒）：离线互相关实测（DF 30 / DF-LL 10 / RNNoise 20 / Apple 57 / 93 ms），
-    /// 帧式引擎再加实时凑满一帧（10ms）的等待。
+    /// Algorithmic latency in seconds, measured offline by cross-correlation (DF 30 / DF-LL 10 / RNNoise 20 / Apple 57 / 93 ms),
+    /// plus, for frame-based engines, the real-time wait to fill one 10 ms frame.
     var latency: Double {
         switch self {
         case .deepFilter: 0.040
@@ -65,15 +65,15 @@ enum DenoiserError: LocalizedError {
     }
 }
 
-/// 固定帧长、48kHz 单声道的降噪器。process 只在工作线程调用。
+/// A denoiser with a fixed frame size working on 48 kHz mono. `process` is only called on the worker thread.
 protocol FrameDenoiser: AnyObject {
     var frameSize: Int { get }
-    /// 降噪强度 0...1，可在任意线程设置，下一帧生效。
+    /// Noise reduction strength 0...1. Can be set from any thread; takes effect on the next frame.
     func setStrength(_ s: Float)
     func process(_ input: UnsafeMutablePointer<Float>, _ output: UnsafeMutablePointer<Float>)
 }
 
-/// DeepFilterNet 3：强度映射到"最多衰减多少 dB"，所以人声不会被整段抹掉。
+/// DeepFilterNet 3: strength maps to "maximum attenuation in dB", so speech is never wiped out entirely.
 final class DeepFilterDenoiser: FrameDenoiser {
     let frameSize: Int
     private let state: OpaquePointer
@@ -91,22 +91,22 @@ final class DeepFilterDenoiser: FrameDenoiser {
         df_set_gain_release(st, Self.gainReleaseDB)
     }
 
-    /// 每个频点的增益每 10ms 最多下降多少 dB（libDF 清听补丁）。0 = 不平滑。
-    /// 课堂录音实测 1 dB：100% 强度下断续 0.76→0.54 次/秒，降噪量只少 1.5 dB。
+    /// Maximum drop of each frequency bin's gain per 10 ms, in dB (QingTing patch to libDF). 0 = no smoothing.
+    /// Measured on classroom recordings at 1 dB: dropouts at 100% strength go from 0.76 to 0.54 per second, at a cost of only 1.5 dB of noise reduction.
     nonisolated(unsafe) static var gainReleaseDB: Float = 1
 
     deinit { df_free(state) }
 
-    /// 强度线性映射到"最多衰减多少 dB"，100% = 30 dB。
-    /// 不用"不设上限"：那样模型判为纯噪声的帧会被整帧清零，远处老师的字一顿一顿（课堂录音实测断续 1.2 次/秒）。
-    /// 下限 0.5 dB：低于 0.01 时 libDF 会直接输出原声、跳过 STFT，延迟突变 30ms 产生咔嗒声。
+    /// Strength maps linearly to "maximum attenuation in dB"; 100% = 30 dB.
+    /// "Unlimited" is deliberately not offered: frames the model judges to be pure noise would be zeroed, making a distant talker sound choppy (1.2 dropouts per second on classroom recordings).
+    /// Lower bound 0.5 dB: below 0.01 libDF passes the input straight through and skips the STFT, so latency jumps by 30 ms and clicks.
     static let maxAttenuationDB: Float = 30
     static func attenuationLimit(for s: Float) -> Float { max(0.5, min(1, s) * maxAttenuationDB) }
 
     func setStrength(_ s: Float) { pendingStrength.store(s.bitPattern, ordering: .relaxed) }
 
     func process(_ input: UnsafeMutablePointer<Float>, _ output: UnsafeMutablePointer<Float>) {
-        // 强度每帧（10ms）最多变 0.005，变化分摊到多帧，避免衰减上限一步跳变
+        // Strength changes by at most 0.005 per 10 ms frame, spreading a change over many frames so the attenuation limit never jumps
         let target = Float(bitPattern: pendingStrength.load(ordering: .relaxed))
         if appliedStrength < 0 { appliedStrength = target; df_set_atten_lim(state, Self.attenuationLimit(for: target)) }
         if target != appliedStrength {
@@ -117,10 +117,10 @@ final class DeepFilterDenoiser: FrameDenoiser {
     }
 }
 
-/// RNNoise：输入输出按 16 位整数刻度；强度用干湿混合实现，干声按算法延迟对齐避免梳状失真。
+/// RNNoise: input and output use 16-bit integer scale. Strength is a wet/dry mix, with the dry signal delayed to match the algorithm to avoid comb filtering.
 final class RNNoiseDenoiser: FrameDenoiser {
     let frameSize = Int(rnnoise_get_frame_size())
-    /// 输出相对输入的延迟（样本），离线互相关实测 20ms。
+    /// Delay of the output relative to the input, in samples: 20 ms, measured offline by cross-correlation.
     static let delay = 960
     private let state: OpaquePointer
     private let strength = Atomic<UInt32>(Float(1).bitPattern)
@@ -156,8 +156,8 @@ final class RNNoiseDenoiser: FrameDenoiser {
     }
 }
 
-/// 收音回调只负责把原始声音写进 input 环；这个线程凑满一帧就降噪，写进 output 环。
-/// 模型推理可能分配内存，放在独立线程里，不占用音频设备的实时线程。
+/// The capture callback only writes raw audio into the input ring; this thread denoises each full frame and writes it to the output ring.
+/// Model inference may allocate memory, so it runs on its own thread instead of the audio device's real-time thread.
 final class DenoiseWorker: @unchecked Sendable {
     let input: RingBuffer
     let output: RingBuffer
@@ -165,7 +165,7 @@ final class DenoiseWorker: @unchecked Sendable {
     private let wake = DispatchSemaphore(value: 0)
     private let finished = DispatchSemaphore(value: 0)
     private let running = Atomic<Bool>(true)
-    /// 最近一帧的处理耗时（微秒），用来确认跟得上实时
+    /// Processing time of the most recent frame in microseconds, to confirm it keeps up with real time
     let lastFrameMicros = Atomic<Int>(0)
 
     init(input: RingBuffer, output: RingBuffer, denoiser: FrameDenoiser) {
@@ -177,11 +177,11 @@ final class DenoiseWorker: @unchecked Sendable {
     func start() {
         let thread = Thread { [self] in loop() }
         thread.qualityOfService = .userInteractive
-        thread.name = "清听降噪"
+        thread.name = "qingting.denoise"
         thread.start()
     }
 
-    /// 实时线程写完数据后调用。
+    /// Called by the real-time thread after it has written data.
     func signal() { wake.signal() }
 
     func stop() {
@@ -190,8 +190,8 @@ final class DenoiseWorker: @unchecked Sendable {
         finished.wait()
     }
 
-    /// 把当前线程设成实时调度（和系统音频线程同一类）：每 10ms 需要最多约 4ms 的计算、8ms 内完成。
-    /// 普通优先级线程在 iPhone 上会被搁置十几毫秒（真机日志：15 分钟 100 多次欠载），缓冲见底就是一次卡顿。
+    /// Puts the current thread on real-time scheduling (the same class as system audio threads): up to about 4 ms of work every 10 ms, finished within 8 ms.
+    /// A normal-priority thread gets parked for well over 10 ms on iPhone (device log: 100+ underruns in 15 minutes), and every empty buffer is an audible dropout.
     private static func makeCurrentThreadRealtime() {
         var tb = mach_timebase_info_data_t()
         mach_timebase_info(&tb)
@@ -203,7 +203,7 @@ final class DenoiseWorker: @unchecked Sendable {
                 thread_policy_set(pthread_mach_thread_np(pthread_self()), thread_policy_flavor_t(THREAD_TIME_CONSTRAINT_POLICY), $0, count)
             }
         }
-        if kr != KERN_SUCCESS { Log.write("降噪线程设实时优先级失败（\(kr)），继续用普通优先级") }
+        if kr != KERN_SUCCESS { Log.write("Could not set real-time priority for the denoise thread (\(kr)); continuing at normal priority") }
     }
 
     private func loop() {

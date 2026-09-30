@@ -23,7 +23,7 @@ struct QingTingApp: App {
         }
         .windowResizability(.contentMinSize)
 
-        // 关掉窗口后也能从菜单栏开关
+        // Lets the app be switched on and off from the menu bar after the window is closed
         MenuBarExtra("清听", systemImage: audio.isRunning ? "ear.fill" : "ear") {
             Button(audio.isRunning ? "停止" : "开始", action: audio.toggle)
             Picker("场景", selection: $audio.mode) {
@@ -42,8 +42,8 @@ struct QingTingApp: App {
     }
 }
 
-/// 无界面自检：`QingTing --selftest [秒数] [--in 名称片段] [--out 名称片段] [--mode classroom] [--engine deepFilter]`
-/// 按秒打印收音/送出电平、缓冲积压、卡顿次数，用来在终端里确认整条链路在跑。
+/// Headless self-test: `QingTing --selftest [seconds] [--in name] [--out name] [--mode classroom] [--engine deepFilter]`
+/// Prints capture/output levels, buffer backlog and glitch counts once a second, to confirm from a terminal that the whole path is running.
 enum SelfTest {
     static func run() {
         let args = CommandLine.arguments
@@ -53,7 +53,7 @@ enum SelfTest {
         let seconds = args.firstIndex(of: "--selftest").flatMap { i in i + 1 < args.count ? Int(args[i + 1]) : nil } ?? 5
 
         let all = AudioDevices.all()
-        print("设备：")
+        print("Devices:")
         for d in all {
             print("  [\(d.id)] \(d.name)  in:\(d.inputChannels) out:\(d.outputChannels) \(Int(AudioDevices.sampleRate(d.id)))Hz")
         }
@@ -62,9 +62,9 @@ enum SelfTest {
             ?? inputs.first { $0.isBuiltIn } ?? inputs.first
         let output = value(after: "--out").flatMap { q in outputs.first { $0.name.localizedCaseInsensitiveContains(q) } }
             ?? outputs.first { $0.looksLikeHearingAid } ?? outputs.first
-        guard let input, let output else { print("找不到设备"); exit(1) }
+        guard let input, let output else { print("No device found"); exit(1) }
         let mode = value(after: "--mode").flatMap(ListeningMode.init) ?? .classroom
-        print("收音：\(input.name) → 输出：\(output.name)  场景：\(mode.title)")
+        print("Capture: \(input.name) -> output: \(output.name)  scene: \(mode.rawValue)")
 
         let pipeline = LivePipeline()
         let engine = value(after: "--engine").flatMap(DenoiseEngine.init) ?? .deepFilter
@@ -74,18 +74,18 @@ enum SelfTest {
         do {
             try pipeline.start(input: input, output: output, engine: engine, strength: 1)
         } catch {
-            print("启动失败：\(error.localizedDescription)")
+            print("Failed to start: \(error.localizedDescription)")
             exit(1)
         }
-        print(String(format: "固定延迟估算 %.1f ms（输入设备 %.1f + 输出设备 %.1f + %@ %.0f）",
+        print(String(format: "Estimated fixed latency %.1f ms (input device %.1f + output device %.1f + %@ %.0f)",
                      pipeline.baseLatency * 1000,
                      AudioDevices.latency(input.id, input: true) * 1000,
                      AudioDevices.latency(output.id, input: false) * 1000,
-                     engine.title, engine.latency * 1000))
+                     engine.rawValue, engine.latency * 1000))
         for s in 1...seconds {
             RunLoop.main.run(until: Date().addingTimeInterval(1))
             let c = pipeline.consumer!
-            print(String(format: "%2ds  收音 %6.1f dBFS  送出 %6.1f dBFS  积压 %5.1f ms  目标 %5.1f ms  欠载 %d  跳帧 %d  每帧 %dµs",
+            print(String(format: "%2ds  in %6.1f dBFS  out %6.1f dBFS  backlog %5.1f ms  target %5.1f ms  underruns %d  skips %d  frame %d us",
                          s, pipeline.inputMeter.dBFS, pipeline.outputMeter.dBFS, pipeline.bufferedMs,
                          Double(c.targetFill) / c.sampleRate * 1000,
                          c.underruns.load(ordering: .relaxed), c.drops.load(ordering: .relaxed),

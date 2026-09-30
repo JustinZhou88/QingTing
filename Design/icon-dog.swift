@@ -5,7 +5,7 @@ let size: CGFloat = 1024
 let p3 = CGColorSpace(name: CGColorSpace.displayP3)!
 func makeContext() -> CGContext {
     let c = CGContext(data: nil, width: Int(size), height: Int(size), bitsPerComponent: 8, bytesPerRow: 0, space: p3, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    c.translateBy(x: 0, y: size); c.scaleBy(x: 1, y: -1)   // y 向下
+    c.translateBy(x: 0, y: size); c.scaleBy(x: 1, y: -1)   // y points down
     return c
 }
 func col(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
@@ -35,7 +35,7 @@ func arc(_ c: CGContext, cx: CGFloat, cy: CGFloat, r: CGFloat, from: CGFloat, to
     c.setStrokeColor(color); c.setLineWidth(width); c.setLineCap(.round)
     c.addArc(center: CGPoint(x: cx, y: cy), radius: r, startAngle: from * .pi / 180, endAngle: to * .pi / 180, clockwise: false); c.strokePath()
 }
-/// 鼻子 + "ω" 嘴 + 可选小舌头
+/// Nose + "w" mouth + optional little tongue
 func muzzle(_ c: CGContext, cx: CGFloat, cy: CGFloat, tongue: Bool) {
     if tongue {
         c.setFillColor(col(0xFF7E9D))
@@ -46,7 +46,7 @@ func muzzle(_ c: CGContext, cx: CGFloat, cy: CGFloat, tongue: Bool) {
     c.setStrokeColor(col(0x2B2340)); c.setLineWidth(17); c.setLineCap(.round)
     c.addArc(center: CGPoint(x: cx - 32, y: cy + 32), radius: 32, startAngle: 0.02 * .pi, endAngle: 0.92 * .pi, clockwise: false); c.strokePath()
     c.addArc(center: CGPoint(x: cx + 32, y: cy + 32), radius: 32, startAngle: 0.08 * .pi, endAngle: 0.98 * .pi, clockwise: false); c.strokePath()
-    // 鼻子：倒圆角三角
+    // Nose: inverted rounded triangle
     let nose = CGMutablePath()
     nose.move(to: CGPoint(x: cx - 46, y: cy - 18))
     nose.addQuadCurve(to: CGPoint(x: cx + 46, y: cy - 18), control: CGPoint(x: cx, y: cy - 40))
@@ -59,21 +59,21 @@ func save(_ c: CGContext, _ name: String) {
     try! NSBitmapImageRep(cgImage: c.makeImage()!).representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: name))
 }
 
-/// 垂耳小狗。perkRight：右耳竖起；tilt：歪头角度
+/// Floppy-eared puppy. tilt: head tilt angle; tongue: whether the tongue sticks out
 func floppyDog(_ c: CGContext, tilt: CGFloat, tongue: Bool) {
     c.saveGState()
     c.translateBy(x: 512, y: 600); c.rotate(by: tilt * .pi / 180); c.translateBy(x: -512, y: -600)
     let brown: UInt32 = 0xB97A4E, brownLight: UInt32 = 0xE3A877
     withShadow(c) {
-        // 竖起的右耳（在头后面）
+        // The perked-up right ear (behind the head)
         ellipse(c, 735, 345, 92, 170, col(brown), rotate: 28)
         ellipse(c, 735, 352, 50, 118, col(brownLight), rotate: 28)
-        // 头
+        // Head
         ellipse(c, 512, 600, 275, 245, col(0xFFFDF8))
-        // 垂着的左耳（盖在头前面）
+        // The drooping left ear (in front of the head)
         ellipse(c, 262, 560, 92, 190, col(brown), rotate: 14)
     }
-    // 右眼的斑
+    // Patch around the right eye
     ellipse(c, 612, 560, 96, 104, col(0xE3A877, 0.9), rotate: -10)
     eye(c, 420, 570, r: 42); eye(c, 610, 570, r: 42)
     blush(c, 352, 672); blush(c, 676, 672)
@@ -81,7 +81,7 @@ func floppyDog(_ c: CGContext, tilt: CGFloat, tongue: Bool) {
     c.restoreGState()
 }
 
-// A：垂耳小狗
+// A: floppy-eared puppy
 do {
     let c = makeContext(); background(c, 0x9CE5FF, 0x4C86FF)
     c.saveGState(); c.translateBy(x: 26, y: 6)
@@ -91,7 +91,7 @@ do {
     arc(c, cx: 822, cy: 250, r: 148, from: -66, to: -12, width: 30, color: col(0xFFFFFF, 0.6))
     save(c, "A.png")
 }
-// B：柴犬
+// B: Shiba Inu
 do {
     let c = makeContext(); background(c, 0xA6E9FF, 0x4F8BFF)
     let orange: UInt32 = 0xF4A24C
@@ -110,13 +110,13 @@ do {
     }
     earTri([CGPoint(x: 312, y: 470), CGPoint(x: 330, y: 300), CGPoint(x: 440, y: 410)], col(0xFFD9C2), radius: 26)
     earTri([CGPoint(x: 712, y: 470), CGPoint(x: 694, y: 300), CGPoint(x: 584, y: 410)], col(0xFFD9C2), radius: 26)
-    // 白色面罩：两颊 + 嘴部
+    // White mask: both cheeks + muzzle
     c.saveGState()
     c.addEllipse(in: CGRect(x: 222, y: 360, width: 580, height: 500)); c.clip()
     ellipse(c, 380, 720, 170, 150, col(0xFFFDF8)); ellipse(c, 644, 720, 170, 150, col(0xFFFDF8)); ellipse(c, 512, 700, 130, 130, col(0xFFFDF8))
-    ellipse(c, 512, 790, 210, 110, col(0xFFFDF8))   // 下巴补满
+    ellipse(c, 512, 790, 210, 110, col(0xFFFDF8))   // Fill in the chin
     c.restoreGState()
-    // 豆豆眉
+    // Dot eyebrows
     ellipse(c, 418, 488, 30, 20, col(0xFFFDF8), rotate: -14); ellipse(c, 606, 488, 30, 20, col(0xFFFDF8), rotate: 14)
     eye(c, 418, 570, r: 40); eye(c, 606, 570, r: 40)
     blush(c, 336, 676); blush(c, 688, 676)
@@ -125,7 +125,7 @@ do {
     arc(c, cx: 770, cy: 300, r: 145, from: -58, to: 2, width: 30, color: col(0xFFFFFF, 0.6))
     save(c, "B.png")
 }
-// C：歪头小狗
+// C: puppy with a tilted head (the one used as the app icon)
 do {
     let c = makeContext(); background(c, 0xA5EED9, 0x4A8CFF)
     floppyDog(c, tilt: -13, tongue: true)
@@ -133,9 +133,9 @@ do {
     arc(c, cx: 760, cy: 235, r: 145, from: -64, to: -4, width: 30, color: col(0xFFFFFF, 0.6))
     save(c, "C.png")
 }
-// 预览
+// Preview sheet
 do {
-    let names = ["A", "B", "C"], titles = ["A 垂耳小狗", "B 柴犬", "C 歪头小狗"]
+    let names = ["A", "B", "C"], titles = ["A Floppy ears", "B Shiba Inu", "C Head tilt"]
     let big: CGFloat = 420, small: CGFloat = 120, pad: CGFloat = 60
     let W = pad + CGFloat(names.count) * (big + pad), H = pad + big + 50 + small + 110
     let img = NSImage(size: NSSize(width: W, height: H)); img.lockFocus()

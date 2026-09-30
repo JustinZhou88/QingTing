@@ -1,13 +1,13 @@
 import Synchronization
 
-/// 单生产者/单消费者无锁环形缓冲：输入设备回调写，输出设备回调读。
-/// 两个设备时钟不同步，消费端负责把积压控制在目标水位附近。
+/// Lock-free single-producer/single-consumer ring buffer: the input device callback writes, the output device callback reads.
+/// The two devices run on different clocks, so the consumer keeps the backlog near a target level.
 final class RingBuffer: @unchecked Sendable {
     let capacity: Int
     private let storage: UnsafeMutablePointer<Float>
     private let writeIndex = Atomic<Int>(0)
     private let readIndex = Atomic<Int>(0)
-    /// 生产端单次写入的最大帧数，消费端据此估算安全水位。
+    /// Largest single write by the producer, in frames. The consumer uses it to estimate a safe fill level.
     let maxWriteChunk = Atomic<Int>(0)
 
     init(capacity: Int) {
@@ -20,7 +20,7 @@ final class RingBuffer: @unchecked Sendable {
 
     var fill: Int { writeIndex.load(ordering: .acquiring) - readIndex.load(ordering: .acquiring) }
 
-    /// 生产端调用。缓冲满时丢弃放不下的新数据。
+    /// Called by the producer. When the buffer is full, new data that does not fit is dropped.
     func write(_ src: UnsafePointer<Float>, count: Int) {
         if count > maxWriteChunk.load(ordering: .relaxed) { maxWriteChunk.store(count, ordering: .relaxed) }
         let w = writeIndex.load(ordering: .relaxed)
@@ -34,7 +34,7 @@ final class RingBuffer: @unchecked Sendable {
         writeIndex.store(w + n, ordering: .releasing)
     }
 
-    /// 消费端调用，返回实际读到的帧数。
+    /// Called by the consumer. Returns the number of frames actually read.
     @discardableResult
     func read(into dst: UnsafeMutablePointer<Float>, count: Int) -> Int {
         let r = readIndex.load(ordering: .relaxed)
@@ -49,7 +49,7 @@ final class RingBuffer: @unchecked Sendable {
         return n
     }
 
-    /// 消费端调用：丢掉最旧的 count 帧（积压过多时追赶延迟）。
+    /// Called by the consumer: drop the oldest `count` frames (to catch up when the backlog is too large).
     func skip(_ count: Int) {
         let r = readIndex.load(ordering: .relaxed)
         let w = writeIndex.load(ordering: .acquiring)
@@ -61,7 +61,7 @@ final class RingBuffer: @unchecked Sendable {
     }
 }
 
-/// 输出回调里的取数逻辑：先攒够目标水位再出声，欠载时补零并重新攒，积压过多时跳帧。
+/// Pull logic for the output callback: wait until the target fill is reached before producing sound, zero-fill and re-prime on underrun, skip frames when the backlog is too large.
 final class RingConsumer: @unchecked Sendable {
     let ring: RingBuffer
     let sampleRate: Double
@@ -75,15 +75,15 @@ final class RingConsumer: @unchecked Sendable {
         self.sampleRate = sampleRate
     }
 
-    /// 目标积压帧数：一次最大取数 + 一次最大写入 + 2ms 余量。
+    /// Target backlog in frames: one maximum pull + one maximum write + 2 ms of headroom.
     var targetFill: Int { maxPull + ring.maxWriteChunk.load(ordering: .relaxed) + Int(sampleRate * 0.002) + extraMargin }
 
-    /// 自适应余量（样本）：每次欠载加 5ms（最多 40ms），连续 60 秒没有欠载再减 5ms。
-    /// 上游偶尔迟到时用一点延迟换不卡顿，稳定后再把延迟收回来。
+    /// Adaptive margin in samples: +5 ms on every underrun (up to 40 ms), -5 ms after 60 s without one.
+    /// Trades a little latency for no dropouts when upstream is occasionally late, then gives the latency back once things are stable.
     private var extraMargin = 0
     private var framesSinceUnderrun = 0
     private let marginBits = Atomic<Int>(0)
-    /// 当前余量（毫秒），给界面和日志用
+    /// Current margin in milliseconds, for the UI and the log
     var marginMs: Double { Double(marginBits.load(ordering: .relaxed)) / sampleRate * 1000 }
 
     func pull(into dst: UnsafeMutablePointer<Float>, count: Int) {
@@ -103,7 +103,7 @@ final class RingConsumer: @unchecked Sendable {
             }
             primed = true
         }
-        // 超出目标 20ms 以上说明输入时钟比输出快，丢掉多余部分把延迟拉回来
+        // More than 20 ms above target means the input clock is faster than the output clock: drop the excess to pull latency back
         if fill > target + Int(sampleRate * 0.02) {
             ring.skip(fill - target)
             drops.add(1, ordering: .relaxed)

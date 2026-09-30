@@ -2,29 +2,29 @@ import ActivityKit
 import AppIntents
 import Foundation
 
-/// 「正在收听」实时活动的数据。App 和小组件扩展都要编译这个文件。
+/// Data of the "listening" Live Activity. Compiled into both the app and the widget extension.
 struct ListeningAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
-        /// 送往哪个设备（助听器名）
+        /// Device the audio is sent to (name of the hearing aids)
         var outputName: String
-        /// 最近约 3 秒送出声音的电平，0...1，从旧到新（展开状态和锁屏用）
+        /// Levels of the audio sent out over roughly the last 3 seconds, 0...1, oldest first (expanded presentation and Lock Screen)
         var levels: [Float]
-        /// 最近 1 秒的电平，每根对应 0.2 秒（收起状态用）
+        /// Levels over the last second, one bar per 0.2 s (compact presentation)
         var recent: [Float]
-        /// 降噪强度（百分比）
+        /// Noise reduction strength (percent)
         var strength: Int
     }
 
-    /// 开始时间，用来显示已收听时长
+    /// Start time, for showing how long listening has been running
     var startedAt: Date
 }
 
 extension Notification.Name {
-    /// 灵动岛/锁屏上点了停止
+    /// Stop was tapped in the Dynamic Island or on the Lock Screen
     static let stopListeningRequested = Notification.Name("qingting.stopListeningRequested")
 }
 
-/// 灵动岛和锁屏上的「停止」按钮。LiveActivityIntent 在 App 进程里执行，所以能直接让收音停下。
+/// The Stop button in the Dynamic Island and on the Lock Screen. A LiveActivityIntent runs in the app process, so it can stop capture directly.
 struct StopListeningIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "停止收听"
     static let isDiscoverable = false

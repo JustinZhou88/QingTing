@@ -2,7 +2,7 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// 高频刷新的显示数据（电平、声纹、延迟、现场分析结果）
+/// Display data that refreshes at a high rate (levels, waveforms, latency, scene analysis result)
 @MainActor
 final class PhoneMeters: ObservableObject {
     @Published var sceneSummary: String?
@@ -17,7 +17,7 @@ final class PhoneMeters: ObservableObject {
 
 @MainActor
 final class PhoneController: ObservableObject {
-    // 每个参数只更新自己对应的那一处：拖滑块时不要连带重设整套预设
+    // Each parameter updates only its own part of the chain: dragging a slider must not reapply the whole preset
     @Published var mode: ListeningMode = .classroom {
         didSet { if !restoring { pipeline.chain.apply(mode.preset) }; settingsChanged() }
     }
@@ -44,8 +44,8 @@ final class PhoneController: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var savedMessage: String?
-    /// 每秒变化 20 次的显示数据单独放一个对象：只有声纹、诊断那几小块界面订阅它。
-    /// 如果和设置项放在一起，运行时整页每秒重绘 20 次，选择器之类的控件会受干扰。
+    /// Display data that changes 20 times a second lives in its own object: only the waveform and diagnostics views observe it.
+    /// If it shared an object with the settings, the whole page would redraw 20 times a second while running and interfere with controls such as pickers.
     let meters = PhoneMeters()
     private(set) var sceneSummary: String? { get { meters.sceneSummary } set { meters.sceneSummary = newValue } }
     private(set) var inputDB: Float { get { meters.inputDB } set { meters.inputDB = newValue } }
@@ -58,7 +58,7 @@ final class PhoneController: ObservableObject {
     @Published private(set) var outputName = PhonePipeline.currentOutput.name
     @Published private(set) var outputIsBuiltIn = PhonePipeline.currentOutput.isBuiltIn
     @Published private(set) var micDescription = ""
-    /// 选了指向收音、但当前麦克风做不到（真机上背面和底部麦克风只有全向）
+    /// Directional pickup was requested but the current microphone cannot do it (on real devices the back and bottom mics do not offer cardioid)
     @Published private(set) var directionalUnavailable = false
 
     let pipeline = PhonePipeline()
@@ -67,7 +67,7 @@ final class PhoneController: ObservableObject {
     private var tuneTimer: Timer?
     private var restoring = true
     private let defaults = UserDefaults.standard
-    /// 被来电打断或助听器断开而停下的，条件恢复后自动继续
+    /// Stopped by an interruption (phone call) or because the hearing aids disconnected; resumes automatically once conditions are back
     private var resumeWhenAvailable = false
 
     init() {
@@ -80,12 +80,12 @@ final class PhoneController: ObservableObject {
         if defaults.object(forKey: "autoGain") != nil { autoGain = defaults.bool(forKey: "autoGain") }
         if let p = defaults.string(forKey: "micPosition").flatMap(MicPosition.init) { micPosition = p }
         if let p = defaults.string(forKey: "micPattern").flatMap(MicPattern.init) { micPattern = p }
-        // 真机数据：指向模式让收音变小变闷（13 mini 正面心形低 14dB、高频少 10dB）、延迟多约 30ms，
-        // 没看到信噪比上的好处。默认改成背面全向，已有设置重置一次。
+        // Device data: directional modes make the capture quieter and duller (front cardioid on a 13 mini: 14 dB lower, 10 dB less treble) and add about 30 ms of latency,
+        // with no SNR benefit observed. The default is now back + omnidirectional; existing settings are reset once.
         if !defaults.bool(forKey: "migratedOmniMic") {
             micPosition = .back
             micPattern = .omni
-            // 这里还在恢复设置的阶段，didSet 不会保存，要自己写回去，否则下次启动又读到旧值
+            // Settings are still being restored here, so didSet does not persist; write the values back explicitly or the old ones are read again at the next launch
             defaults.set(MicPosition.back.rawValue, forKey: "micPosition")
             defaults.set(MicPattern.omni.rawValue, forKey: "micPattern")
             defaults.set(true, forKey: "migratedOmniMic")
@@ -104,24 +104,24 @@ final class PhoneController: ObservableObject {
         nc.addObserver(forName: .stopListeningRequested, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.isRunning else { return }
-                self.stop(reason: "在灵动岛/锁屏上点了停止")
+                self.stop(reason: "stopped from the Dynamic Island or Lock Screen")
             }
         }
         nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.restart(reason: "系统音频服务重置") }
+            Task { @MainActor in self?.restart(reason: "media services were reset") }
         }
         nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.isRunning, !self.pipeline.isRunning else { return }
-                self.restart(reason: "音频引擎被系统停止")
+                self.restart(reason: "the audio engine was stopped by the system")
             }
         }
-        Log.write("启动 App；引擎=\(engine.title) 场景=\(mode.title) 麦克风=\(micPosition.title)/\(micPattern.title) 输出=\(outputName)")
+        Log.write("App launched; engine=\(engine.rawValue) scene=\(mode.rawValue) mic=\(micPosition.rawValue)/\(micPattern.rawValue) output=\(outputName)")
     }
 
-    // MARK: - 启停
+    // MARK: - Start and stop
 
-    func toggle() { isRunning ? stop(reason: "用户点停止") : start() }
+    func toggle() { isRunning ? stop(reason: "stop pressed") : start() }
 
     func start() {
         errorMessage = nil
@@ -144,7 +144,7 @@ final class PhoneController: ObservableObject {
             isRunning = true
             errorMessage = nil
             glitches = 0
-            Log.write("已开始：\(micDescription) → \(outputName)，引擎 \(engine.title)，固定延迟≈\(Int(pipeline.baseLatency * 1000))ms")
+            Log.write("Started: \(micDescription) -> \(outputName), engine \(engine.rawValue), fixed latency ~\(Int(pipeline.baseLatency * 1000)) ms")
             liveActivity.start(outputName: outputName, strength: Int(strength * 100))
             meterTimer?.invalidate()
             meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
@@ -162,7 +162,7 @@ final class PhoneController: ObservableObject {
     }
 
     func stop(reason: String) {
-        Log.write("停止：\(reason)")
+        Log.write("Stopped: \(reason)")
         resumeWhenAvailable = false
         liveActivity.end()
         demoTimer?.invalidate()
@@ -183,22 +183,22 @@ final class PhoneController: ObservableObject {
 
     private func restart(reason: String) {
         guard isRunning else { return }
-        Log.write("重启：\(reason)")
+        Log.write("Restarting: \(reason)")
         pipeline.stop()
         startNow()
     }
 
     private func fail(_ message: String) {
         errorMessage = message
-        Log.write("错误：\(message)")
+        Log.write("Error: \(message)")
     }
 
-    // MARK: - 演示模式（仅模拟器）
+    // MARK: - Demo mode (simulator only)
 
     private var demoTimer: Timer?
 
-    /// 模拟器里没有助听器也不该开麦克风：用假的电平驱动界面和灵动岛，检查显示效果。
-    /// 启动参数带 -demo 时生效；真机上这个方法什么都不做。
+    /// The simulator has no hearing aids and should not open the microphone: fake levels drive the UI and the Dynamic Island so the display can be checked.
+    /// Active when launched with -demo; on a real device this method does nothing.
     func startDemoIfRequested() {
         #if targetEnvironment(simulator)
         guard CommandLine.arguments.contains("-demo") else { return }
@@ -207,7 +207,7 @@ final class PhoneController: ObservableObject {
         outputIsBuiltIn = false
         latencyMs = 82
         liveActivity.start(outputName: outputName, strength: Int(strength * 100))
-        // 切到主屏幕后还要继续喂数据才能看灵动岛的变化：申请一段后台时间（约 30 秒）
+        // Data must keep flowing after switching to the home screen to see the Dynamic Island change, so request some background time (about 30 s)
         var bg = UIBackgroundTaskIdentifier.invalid
         bg = UIApplication.shared.beginBackgroundTask { UIApplication.shared.endBackgroundTask(bg) }
         var t = 0.0
@@ -215,7 +215,7 @@ final class PhoneController: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 t += 0.05
-                // 一句一句说话的样子：有起伏、有停顿
+                // Looks like sentence-by-sentence speech: rises, falls and pauses
                 let speaking = sin(t * 1.3) > -0.3
                 let envelope = Float(abs(sin(t * 7.1)) * 0.6 + abs(sin(t * 3.3)) * 0.4)
                 self.inputDB = -38 + envelope * 8
@@ -228,16 +228,16 @@ final class PhoneController: ObservableObject {
         #endif
     }
 
-    // MARK: - 打断与路由
+    // MARK: - Interruptions and routing
 
-    /// 打断进行中（来电、闹钟、Siri 等）。这期间系统不允许重新激活音频会话。
+    /// An interruption is in progress (phone call, alarm, Siri...). The system refuses to reactivate the audio session during it.
     private var isInterrupted = false
 
     private func interrupted(began: Bool) {
         if began {
             isInterrupted = true
             if isRunning {
-                stop(reason: "被打断（来电、闹钟等）")
+                stop(reason: "interrupted (phone call, alarm...)")
                 resumeWhenAvailable = true
                 errorMessage = "被来电等打断，结束后会自动继续"
             }
@@ -247,11 +247,11 @@ final class PhoneController: ObservableObject {
         }
     }
 
-    /// 自动恢复。打断刚结束时会话可能还激活不了，失败就隔 1 秒再试，最多 5 次。
+    /// Automatic resume. Right after an interruption ends the session may still fail to activate, so retry every second, up to 5 times.
     private func resume(attempt: Int) {
         guard resumeWhenAvailable, !isRunning, !isInterrupted else { return }
-        guard !PhonePipeline.currentOutput.isBuiltIn else { return }   // 助听器还没回来，等路由变化
-        Log.write("自动恢复（第 \(attempt) 次）")
+        guard !PhonePipeline.currentOutput.isBuiltIn else { return }   // Hearing aids are not back yet; wait for a route change
+        Log.write("Auto resume (attempt \(attempt))")
         startNow()
         if isRunning {
             resumeWhenAvailable = false
@@ -264,37 +264,37 @@ final class PhoneController: ObservableObject {
         }
     }
 
-    /// 助听器断开时声音会自动切到 iPhone 扬声器——麦克风收到后会啸叫，必须立刻停。
+    /// When the hearing aids disconnect, audio falls back to the iPhone speaker; the microphone would pick it up and howl, so stop at once.
     private func routeChanged() {
         let out = PhonePipeline.currentOutput
         outputName = out.name
         outputIsBuiltIn = out.isBuiltIn
         if isRunning, out.isBuiltIn {
-            stop(reason: "输出变成了 \(out.name)")
+            stop(reason: "output changed to \(out.name)")
             resumeWhenAvailable = true
             errorMessage = "助听器断开了，已停止以免扬声器啸叫；重新连上后会自动继续"
         } else if resumeWhenAvailable, !out.isBuiltIn, !isRunning, !isInterrupted {
-            // 打断期间的路由变化不算数：那时激活会话必然失败（真机日志里就是这样丢掉了自动恢复）
+            // Route changes during an interruption do not count: activating the session is bound to fail then (this is how auto resume got lost in a device log)
             resume(attempt: 1)
         }
     }
 
-    // MARK: - 录音
+    // MARK: - Recording
 
     func saveRecent() {
         let note = "\(engine.title)_\(micPosition.title)\(micPattern == .cardioid ? "指向" : "全向")_降噪\(Int(strength * 100))"
         do {
             _ = try pipeline.saveRecent(note: note)
             savedMessage = "已保存到「文件」→ 我的 iPhone → 清听 → 清听录音"
-            Log.write("保存录音 \(note)")
+            Log.write("Saved recording \(note)")
         } catch {
             fail("保存失败：\(error.localizedDescription)")
         }
     }
 
-    // MARK: - 自动调参（与 Mac 版同一套规则）
+    // MARK: - Auto tuning (same rules as the Mac version)
 
-    private let analysisQueue = DispatchQueue(label: "清听.现场分析", qos: .utility)
+    private let analysisQueue = DispatchQueue(label: "qingting.scene-analysis", qos: .utility)
     private var analyzer: SceneAnalyzer?
     private var lastScene: SceneAnalyzer.Estimate?
 
@@ -328,7 +328,7 @@ final class PhoneController: ObservableObject {
                               e.speechSNR, e.highSNR, target.strength * 100, target.clarityDB)
     }
 
-    // MARK: - 电平与日志
+    // MARK: - Levels and logging
 
     private var lastStatLog = Date.distantPast
 
@@ -346,19 +346,19 @@ final class PhoneController: ObservableObject {
             if Date().timeIntervalSince(lastStatLog) > 3 {
                 lastStatLog = Date()
                 if autoTune, let e = lastScene {
-                    Log.write(String(format: "现场 信噪比 %.1f 高频信噪比 %.1f 高频倾斜 %.1f 说话占比 %.0f%% → 降噪 %.0f%% 清晰度 %.1f",
+                    Log.write(String(format: "scene snr %.1f hf-snr %.1f tilt %.1f speech %.0f%% -> strength %.0f%% clarity %.1f",
                                      e.speechSNR, e.highSNR, e.tilt, e.speechFraction * 100, strength * 100, clarityDB))
                 }
-                Log.write(String(format: "运行中 收音 %.0f dBFS  送出 %.0f dBFS  积压 %.0f ms  欠载 %d  跳帧 %d  %@ %d%%  自动增益%+.0fdB  每帧 %dµs  延迟≈%.0fms",
+                Log.write(String(format: "running in %.0f dBFS  out %.0f dBFS  backlog %.0f ms  underruns %d  skips %d  %@ %d%%  agc %+.0f dB  frame %d us  latency ~%.0f ms",
                                  inputDB, outputDB, pipeline.bufferedMs,
                                  c.underruns.load(ordering: .relaxed), c.drops.load(ordering: .relaxed),
-                                 engine.title + String(format: " 余量%.0fms", c.marginMs), Int(strength * 100), agcGainDB,
+                                 engine.rawValue + String(format: " margin %.0f ms", c.marginMs), Int(strength * 100), agcGainDB,
                                  pipeline.worker?.lastFrameMicros.load(ordering: .relaxed) ?? 0, latencyMs))
             }
         }
     }
 
-    // MARK: - 参数
+    // MARK: - Settings
 
     private func settingsChanged(restart needsRestart: Bool = false, reconfigure: Bool = false) {
         guard !restoring else { return }
@@ -371,7 +371,7 @@ final class PhoneController: ObservableObject {
         defaults.set(autoGain, forKey: "autoGain")
         defaults.set(micPosition.rawValue, forKey: "micPosition")
         defaults.set(micPattern.rawValue, forKey: "micPattern")
-        if needsRestart { restart(reason: reconfigure ? "换麦克风" : "换引擎") }
+        if needsRestart { restart(reason: reconfigure ? "microphone changed" : "engine changed") }
     }
 
     private func applyProcessing() {

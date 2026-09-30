@@ -1,26 +1,26 @@
 import Accelerate
 import Foundation
 
-/// 现场声学分析：从最近几秒的原始收音里估计人声频段信噪比、高频衰减，据此给出降噪强度和清晰度。
-/// 做法：按 300–3000Hz 能量把帧分成"有人说话""停顿"两类，分别求平均功率谱，
-/// 说话谱减去噪声谱就是估计的人声谱。
+/// Acoustic scene analysis: estimates speech-band SNR and high-frequency loss from the last few seconds of raw capture, and derives noise reduction strength and clarity from them.
+/// Method: split frames into "speech" and "pause" by their 300-3000 Hz energy, average the power spectrum of each,
+/// and subtract the noise spectrum from the speech spectrum to estimate the speech itself.
 final class SceneAnalyzer {
     struct Estimate {
-        var speechSNR: Float      // 300–4000Hz 人声/噪声（dB）
-        var highSNR: Float        // 2–5kHz 人声/噪声（dB）
-        var tilt: Float           // 人声 2–5kHz 相对 300–1500Hz（dB），越负越闷
-        var speechFraction: Float // 有人说话的帧占比
+        var speechSNR: Float      // Speech/noise over 300-4000 Hz (dB)
+        var highSNR: Float        // Speech/noise over 2-5 kHz (dB)
+        var tilt: Float           // Speech at 2-5 kHz relative to 300-1500 Hz (dB); more negative = duller
+        var speechFraction: Float // Fraction of frames containing speech
     }
 
     struct Params {
-        var strength: Float       // 降噪强度 0...1
-        var clarityDB: Float      // 2kHz 以上提升
+        var strength: Float       // Noise reduction strength 0...1
+        var clarityDB: Float      // Boost above 2 kHz
     }
 
-    /// 近距离正常说话时 2–5kHz 相对 300–1500Hz 的电平（dB）。
-    /// 长时平均语音谱（Byrne 1994）算得约 -14.3，近讲 TTS 实测 -14.7。
+    /// Level of 2-5 kHz relative to 300-1500 Hz (dB) for normal speech at close range.
+    /// About -14.3 from the long-term average speech spectrum (Byrne 1994); -14.7 measured on close-talking TTS.
     static let referenceTilt: Float = -14
-    /// 不论距离，都给辅音一点固定强调：戴助听器在噪声里分辨辅音本来就吃力
+    /// A fixed consonant emphasis regardless of distance: telling consonants apart in noise is hard with hearing aids to begin with
     static let baseClarity: Float = 4
 
     let sampleRate: Double
@@ -38,7 +38,7 @@ final class SceneAnalyzer {
 
     deinit { vDSP_destroy_fftsetup(fft) }
 
-    /// 分析一段音频；有效人声太少（没人说话）时返回 nil，调用方应保持原参数。
+    /// Analyzes a stretch of audio. Returns nil when there is too little speech (nobody talking); the caller should keep its current parameters.
     func analyze(_ x: [Float]) -> Estimate? {
         let hop = n / 2
         guard x.count > n * 8 else { return nil }
@@ -92,12 +92,12 @@ final class SceneAnalyzer {
             speechFraction: Float(speechIdx.count) / Float(vad.count))
     }
 
-    /// 由现场估计算参数。
-    /// - 降噪强度：人声频段信噪比 ≥21dB 只留 15%，≤8dB 用到 80%；课堂实测约 15dB → 45%，
-    ///   与离线对比里断续最少、降噪量足够的 50% 一致。上限 80%：再高会一顿一顿、丢细节。
-    /// - 清晰度：固定强调 + 高频相对正常语音缺失量的 70%，0–12dB；高频信噪比低时限制，避免放大嘶嘶声。
-    /// - agcGainDB：自动音量当前的增益。它把降噪后剩下的底噪也一起放大，超过 10dB 的部分
-    ///   每 1dB 多给 1.5% 的降噪强度（真机上收音很小时增益顶到 +24dB，38% 的降噪压不住底噪）。
+    /// Derives parameters from a scene estimate.
+    /// - Strength: 15% when the speech-band SNR is >= 21 dB, 80% at <= 8 dB. Classrooms measured around 15 dB -> 45%,
+    ///   matching the 50% that gave the fewest dropouts with enough noise reduction in offline comparisons. Capped at 80%: higher gets choppy and loses detail.
+    /// - Clarity: fixed emphasis + 70% of the high-frequency deficit relative to normal speech, 0-12 dB; limited when the high-band SNR is low, to avoid boosting hiss.
+    /// - agcGainDB: current auto volume gain. It also amplifies the noise left after denoising, so every dB above 10 dB
+    ///   adds 1.5% strength (on a device with very quiet capture the gain hit +24 dB and 38% noise reduction could not hold the floor down).
     static func params(for e: Estimate, agcGainDB: Float = 0) -> Params {
         let base = (24 - e.speechSNR) / 20 + max(0, agcGainDB - 10) * 0.015
         let strength = min(0.8, max(0.15, base))

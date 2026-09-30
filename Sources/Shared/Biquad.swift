@@ -1,8 +1,8 @@
 import Foundation
 
-/// 4 阶巴特沃斯高通（两个二阶节级联），逐样本处理，可在实时线程用。
-/// 收音后、降噪前先切掉空调/通风/桌面震动这类低频：课堂录音里 250Hz 以下的噪声比人声还大，
-/// 它会让降噪模型以为整段都很吵而下手过重，连带压掉辅音细节。
+/// 4th-order Butterworth high-pass (two cascaded biquads), processed sample by sample, safe for the real-time thread.
+/// Cuts low-frequency noise (air conditioning, ventilation, desk rumble) after capture and before noise reduction: in classroom recordings the noise below 250 Hz is louder than the speech,
+/// which makes the denoiser think the whole signal is noisy and suppress too hard, taking consonant detail with it.
 final class HighPassFilter {
     private struct Section {
         var b0: Float, b1: Float, b2: Float, a1: Float, a2: Float
@@ -11,7 +11,7 @@ final class HighPassFilter {
     private var sections: [Section]
 
     init(cutoff: Double, sampleRate: Double) {
-        // 4 阶巴特沃斯的两个二阶节 Q 值
+        // Q values of the two biquads of a 4th-order Butterworth
         sections = [0.5412, 1.3066].map { q in
             let w = 2 * Double.pi * cutoff / sampleRate
             let alpha = sin(w) / (2 * q), c = cos(w), a0 = 1 + alpha
@@ -24,7 +24,7 @@ final class HighPassFilter {
         for s in sections.indices {
             var f = sections[s]
             for i in 0..<count {
-                // 转置直接 II 型
+                // Transposed direct form II
                 let y = f.b0 * x[i] + f.z1
                 f.z1 = f.b1 * x[i] - f.a1 * y + f.z2
                 f.z2 = f.b2 * x[i] - f.a2 * y

@@ -2,7 +2,7 @@ import AVFoundation
 import AudioToolbox
 import Synchronization
 
-/// 使用场景预设。
+/// Listening scene presets.
 enum ListeningMode: String, CaseIterable, Identifiable {
     case classroom, discussion, conversation
     var id: String { rawValue }
@@ -39,20 +39,20 @@ enum ListeningMode: String, CaseIterable, Identifiable {
 }
 
 struct VoicePreset {
-    var presenceGain: Float      // dB，2.5kHz 附近辅音清晰度
-    var compThreshold: Float     // dB，压缩起点
-    var headRoom: Float          // dB，压缩余量（越小压得越狠）
+    var presenceGain: Float      // dB, consonant clarity around 2.5 kHz
+    var compThreshold: Float     // dB, where compression starts
+    var headRoom: Float          // dB, compression headroom (smaller = harder compression)
     var attack: Float            // s
     var release: Float           // s
     var makeupGain: Float        // dB
-    var agcRise: Float           // dB/s，人声变小时自动增益的上升速度（多人讨论要快，单人讲课要稳）
+    var agcRise: Float           // dB/s, how fast the auto gain rises when speech gets quieter (fast for group discussion, steady for a single lecturer)
     var agcFall: Float           // dB/s
 }
 
-/// 高通/临场感 EQ → Apple 语音隔离 → 自动增益 → 压缩 → 限幅器。
-/// 平台无关，Mac 与 iPhone 共用。
+/// Presence EQ -> Apple voice isolation -> auto gain -> compressor -> limiter.
+/// Platform independent, shared by Mac and iPhone.
 final class VoiceChain {
-    /// 用户音量上限（dB），再往上由限幅器兜底。
+    /// Upper bound of the user volume in dB; anything beyond is caught by the limiter.
     static let maxVolumeDB: Float = 12
 
     let eq = AVAudioUnitEQ(numberOfBands: 2)
@@ -65,12 +65,12 @@ final class VoiceChain {
     }()
     var agc: AGCProcessor { (agcNode.auAudioUnit as! AGCAudioUnit).processor }
 
-    /// 高通/临场感 EQ → Apple 隔离（仅 Apple 引擎）→ 自动增益 → 压缩 → 限幅
+    /// Presence EQ -> Apple isolation (Apple engines only) -> auto gain -> compressor -> limiter
     var nodes: [AVAudioNode] { [eq, isolation, agcNode, dynamics, limiter] }
 
     init() {
-        // 清晰度：2kHz 以上高架提升，补回远处传来衰减掉的辅音（课堂录音里高频比中频弱 10-15dB）。
-        // 低频切除不在这里做，在收音端降噪之前做（见 HighPassFilter）。
+        // Clarity: high shelf above 2 kHz that emphasizes consonants, which are hard to pick out in noise through hearing aids.
+        // The low cut is not done here; it happens on the capture side before noise reduction (see HighPassFilter).
         eq.bands[0].filterType = .highShelf
         eq.bands[0].frequency = 2000
         eq.bands[0].gain = 6
@@ -79,8 +79,8 @@ final class VoiceChain {
         eq.bands[1].frequency = 2500
         eq.bands[1].bandwidth = 1.5
         eq.bands[1].bypass = false
-        setIsolationParam(1, 1) // Sound to Isolate = "Voice"（比 High Quality Voice 延迟低、降噪强）
-        // 关掉压缩器自带的扩展（噪声门）：噪声交给降噪引擎处理，门限只会把远处老师的字尾切掉
+        setIsolationParam(1, 1) // Sound to Isolate = "Voice" (lower latency and stronger than High Quality Voice)
+        // Disable the compressor's built-in expander (noise gate): noise is the denoiser's job, and a gate only chops off the ends of a distant talker's words
         setDynamics(kDynamicsProcessorParam_ExpansionRatio, 1)
         setLimiter(kLimiterParam_AttackTime, 0.002)
         setLimiter(kLimiterParam_DecayTime, 0.05)
@@ -90,7 +90,7 @@ final class VoiceChain {
         nodes.forEach(engine.attach)
     }
 
-    /// source → chain → destination，全程同一单声道格式。
+    /// source -> chain -> destination, the same mono format throughout.
     func connect(in engine: AVAudioEngine, from source: AVAudioNode, to destination: AVAudioNode, format: AVAudioFormat) {
         let chain = [source] + nodes + [destination]
         for (a, b) in zip(chain, chain.dropFirst()) {
@@ -108,16 +108,16 @@ final class VoiceChain {
         agc.update { $0.riseDBPerSec = p.agcRise; $0.fallDBPerSec = p.agcFall }
     }
 
-    /// 清晰度（2kHz 以上提升多少 dB）。只设目标，实际增益由 rampClarity() 慢慢靠过去：
-    /// EQ 系数一步跳变会有瞬态，实测 1dB 一步的瑕疵只比人声低 19dB、说话时能听到"嗒"，
-    /// 0.1dB 一步则低约 39dB。
+    /// Clarity (boost above 2 kHz, in dB). Only sets the target; rampClarity() moves the actual gain there slowly:
+    /// a step change in EQ coefficients causes a transient. Measured: a 1 dB step leaves an artifact only 19 dB below the speech (an audible tick),
+    /// while a 0.1 dB step is about 39 dB below.
     func setClarity(_ db: Float, immediately: Bool = false) {
         clarityTarget = max(0, min(Self.maxClarityDB, db))
         if immediately { eq.bands[0].gain = clarityTarget }
     }
     private var clarityTarget: Float = 6
 
-    /// 每 50ms 调一次：最多变 0.1dB（即 2dB/秒）。
+    /// Call every 50 ms: changes by at most 0.1 dB (i.e. 2 dB/s).
     func rampClarity() {
         let current = eq.bands[0].gain
         let diff = clarityTarget - current
@@ -125,20 +125,20 @@ final class VoiceChain {
         eq.bands[0].gain = current + max(-0.1, min(0.1, diff))
     }
     static let maxClarityDB: Float = 12
-    /// 收音后、降噪前的低切频率
+    /// Low-cut frequency applied after capture and before noise reduction
     static let lowCutHz = 250.0
 
-    /// 自动音量（AGC）开关。
+    /// Auto volume (AGC) switch.
     func setAutoGain(_ on: Bool) {
         agc.setEnabled(on)
     }
 
-    /// 降噪强度 0...1，对应语音隔离的干湿比。
+    /// Noise reduction strength 0...1, mapped to the wet/dry mix of the voice isolation unit.
     func setStrength(_ s: Float) {
         setIsolationParam(0, max(0, min(1, s)) * 100)
     }
 
-    /// 音量（dB），进限幅器之前加，所以再大也不会削顶超过满刻度。
+    /// Volume in dB, applied before the limiter, so however loud it is set the output never clips past full scale.
     func setVolume(_ db: Float) {
         setLimiter(kLimiterParam_PreGain, min(db, Self.maxVolumeDB))
     }
@@ -146,14 +146,14 @@ final class VoiceChain {
     private var appleIsolationOn = true
     private var bypassAll = false
 
-    /// 选 Apple 引擎时启用语音隔离 AU，并切换其模式；选别的引擎时它直通。
+    /// Enables the voice isolation AU and sets its mode when an Apple engine is selected; bypasses it for other engines.
     func setEngine(_ engine: DenoiseEngine) {
         appleIsolationOn = engine == .appleVoice || engine == .appleHQ
         setIsolationParam(1, engine == .appleHQ ? 0 : 1) // 0 = High Quality Voice, 1 = Voice
         updateBypass()
     }
 
-    /// 原声对比：关掉 EQ/降噪/压缩，只保留限幅器保护听力。
+    /// Compare with original: turn off EQ, noise reduction and compression, keeping only the limiter to protect hearing.
     func setBypass(_ on: Bool) {
         bypassAll = on
         updateBypass()
@@ -166,7 +166,7 @@ final class VoiceChain {
         dynamics.bypass = bypassAll
     }
 
-    /// 当前压缩量（dB），用于界面显示。
+    /// Current compression amount in dB, for display.
     var compressionAmount: Float {
         var v: AudioUnitParameterValue = 0
         AudioUnitGetParameter(dynamics.audioUnit, kDynamicsProcessorParam_CompressionAmount, kAudioUnitScope_Global, 0, &v)
@@ -194,10 +194,10 @@ extension AudioComponentDescription {
     }
 }
 
-/// 实时线程里用的电平计：存 Float 的 bit pattern。
+/// Level meter usable from the real-time thread: stores the bit pattern of a Float.
 final class LevelMeter: @unchecked Sendable {
     private let bits = Atomic<UInt32>(0)
-    /// 最近一块的 RMS（线性）
+    /// RMS of the most recent block (linear)
     var rms: Float { Float(bitPattern: bits.load(ordering: .relaxed)) }
     func store(_ v: Float) { bits.store(v.bitPattern, ordering: .relaxed) }
 
