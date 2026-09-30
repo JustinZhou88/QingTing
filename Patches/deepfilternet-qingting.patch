@@ -1,0 +1,119 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 1019dbe..25e97d1 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,13 +1,7 @@
+ [workspace]
+ resolver = "2"
+ 
+-members = [
+-  "libDF",
+-  "pyDF",
+-  "pyDF-data",
+-  "ladspa",
+-  "demo",
+-]
++members = ["libDF"]
+ 
+ [profile.dev]
+ opt-level = 1
+diff --git a/libDF/Cargo.toml b/libDF/Cargo.toml
+index c0f3271..6a832ba 100644
+--- a/libDF/Cargo.toml
++++ b/libDF/Cargo.toml
+@@ -38,7 +38,6 @@ dataset = [
+   "dep:ndarray",
+   "dep:ndarray-rand",
+   "dep:rand_xoshiro",
+-  "dep:hdf5",
+   "dep:rayon",
+   "dep:crossbeam-channel",
+   "dep:serde_json",
+@@ -91,7 +90,6 @@ wasm = [
+   "dep:console_error_panic_hook",
+   "dep:js-sys",
+ ]
+-hdf5-static = ["hdf5?/static"]
+ 
+ [dependencies]
+ rustfft = "^6.1.0"
+@@ -107,7 +105,6 @@ thiserror = { version = "1.0", optional = true }
+ anyhow = { version = "1.0", optional = true, features = ["backtrace"] }
+ ctrlc = { version = "3.2", optional = true }
+ hound = { version = "3.4", optional = true }
+-hdf5 = { optional = true, git = "https://github.com/aldanor/hdf5-rust.git", rev = "26046fb" }
+ ndarray = { version = "^0.15", optional = true, features = ["serde"] }
+ ndarray-rand = { version = "^0.14", optional = true }
+ rayon = { version = "1.5", optional = true }
+diff --git a/libDF/src/capi.rs b/libDF/src/capi.rs
+index 37f9afd..b738be5 100644
+--- a/libDF/src/capi.rs
++++ b/libDF/src/capi.rs
+@@ -251,3 +251,13 @@ pub unsafe extern "C" fn df_gain_size(st: *const DFState) -> DynArray {
+ pub unsafe extern "C" fn df_free(model: *mut DFState) {
+     let _ = Box::from_raw(model);
+ }
++
++
++/// 清听补丁：ERB 增益的释放平滑。每帧（10ms）增益最多下降 `db_per_frame` dB，上升不限。
++/// 模型的增益逐帧抖动，远场低信噪比人声会在字中间被瞬间压下去，听感一顿一顿；
++/// 限制下降速度能填平这些瞬间凹陷，持续噪声仍会在约 100ms 内被压下去。0 = 关闭。
++#[no_mangle]
++pub unsafe extern "C" fn df_set_gain_release(st: *mut DFState, db_per_frame: f32) {
++    let state = st.as_mut().expect("Invalid pointer");
++    state.m.gain_release = if db_per_frame > 0. { 10f32.powf(-db_per_frame / 20.) } else { 0. };
++}
+diff --git a/libDF/src/tract.rs b/libDF/src/tract.rs
+index b39a987..a59a556 100644
+--- a/libDF/src/tract.rs
++++ b/libDF/src/tract.rs
+@@ -218,6 +218,8 @@ pub struct DfTract {
+     pub max_db_erb_thresh: f32,
+     pub max_db_df_thresh: f32,
+     pub reduce_mask: ReduceMask,
++    pub gain_release: f32, // 清听补丁：每个频点的增益每帧最多下降到上一帧的这个倍数，0 = 关闭
++    pub prev_gains: Vec<f32>, // 清听补丁：上一帧各频点的增益
+     pub atten_lim: Option<f32>,
+     pub df_states: Vec<DFState>,
+     pub spec_buf: Tensor, // Real-valued spectrogram buffer of shape [n_ch, 1, 1, n_freqs, 2]
+@@ -358,6 +360,8 @@ impl DfTract {
+             post_filter: rp.post_filter,
+             post_filter_beta: rp.post_filter_beta,
+             skip_counter: 0,
++            gain_release: 0.,
++            prev_gains: Vec::new(),
+         };
+         m.init()?;
+         #[cfg(feature = "timings")]
+@@ -622,6 +626,31 @@ impl DfTract {
+             );
+         }
+ 
++        // 清听补丁：释放平滑。逐频点比较增强前后幅度，增益每帧最多降到上一帧的 gain_release 倍，
++        // 填平远场人声字中间的瞬间凹陷；上升不受限，持续噪声仍会逐帧被压下去。
++        if self.gain_release > 0. {
++            let noisy = spec_noisy.as_slice().unwrap();
++            let enh = spec_enh.as_slice_mut().unwrap();
++            if self.prev_gains.len() != enh.len() {
++                self.prev_gains = vec![1.; enh.len()];
++            }
++            for ((e, n), p) in enh.iter_mut().zip(noisy.iter()).zip(self.prev_gains.iter_mut()) {
++                let nn = n.norm();
++                if nn < 1e-12 {
++                    continue;
++                }
++                let g = e.norm() / nn;
++                let floor = *p * self.gain_release;
++                let g = if g < floor {
++                    *e = if g > 1e-6 { *e * (floor / g) } else { *n * floor };
++                    floor
++                } else {
++                    g
++                };
++                *p = g.min(1.);
++            }
++        }
++
+         // Limit noise attenuation by mixing back some of the noisy signal
+         if let Some(lim) = self.atten_lim {
+             spec_enh.map_inplace(|x| *x *= 1. - lim);
